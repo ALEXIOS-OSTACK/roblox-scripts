@@ -1,676 +1,342 @@
---[[  Cultivate Bot — Ultimate Card UI + Qi-aware
-     - ใช้ Qi เพื่อตรวจว่านั่งสมาธิอยู่จริง (Qi ต้อง “ไหลขึ้น”)
-     - ใช้ Progress (เปอร์เซ็นต์) เพื่อตัดสินใจ Break (>= 100)
-     - UI หรูโทนครีมทอง + ริบบิ้น, Progress Bar, Log, Hotkeys, Minimize, Theme
-     - Rebind อัตโนมัติ, Auto-Recover, Failsafe
-     NOTE: ปรับ path Qi/Progress ตรงส่วน "PATHS" ถ้าเกมของคุณต่างไป
---]]
+-- Cultivate Bot (Robust Flow • Any Unit • Draggable • No Spam)
 
--------------------- Services --------------------
+---------------- Services ----------------
 local RS         = game:GetService("ReplicatedStorage")
 local Players    = game:GetService("Players")
 local UIS        = game:GetService("UserInputService")
-local TweenS     = game:GetService("TweenService")
 local StarterGui = game:GetService("StarterGui")
-local RunS       = game:GetService("RunService")
 
-local player   = Players.LocalPlayer
-local pg       = player:WaitForChild("PlayerGui")
+local player = Players.LocalPlayer
+local pg     = player:WaitForChild("PlayerGui")
 
--------------------- Remotes ---------------------
-local RemoteEvents = RS:WaitForChild("RemoteEvents")
-local CultivationEvent = RemoteEvents:WaitForChild("CultivationEvent")
+---------------- Remote ------------------
+local CultivationEvent = RS:WaitForChild("RemoteEvents"):WaitForChild("CultivationEvent")
 
--------------------- CONFIG (ปรับได้) -----------
-local DEFAULTS = {
-  CHECK_INTERVAL     = 0.5,
-  STAND_UP_DELAY     = 0.5,
-  BREAK_DURATION     = 2.0,
-  BREAK_DEBOUNCE     = 3.0,
-  RECOVERY_TIMEOUT   = 6.0,  -- Qi ไม่ขยับเกินค่านี้ → กด Cultivate ใหม่
-  RECOVERY_COOLDOWN  = 4.0,
-  FAILSAFE_SECONDS   = 120,  -- ถ้าไม่เคย Break เลยในเวลานี้ ให้ Restart Bot
-  START_ON_JOIN      = false,
-  THEME              = "cream", -- "cream" | "jade"
-}
+---------------- Config ------------------
+local CHECK_INTERVAL      = 0.5
 
--------------------- PATHS (สำคัญ) --------------
--- Progress (Text: "Progress : 85" / "85%" ฯลฯ)
-local function bindProgressLabel()
-  return player:WaitForChild("PlayerGui")
-    :WaitForChild("ScreenGui")
-    :WaitForChild("Sidebar")
-    :WaitForChild("Stats")
-    :WaitForChild("StatsFrame")
-    :WaitForChild("LowerStats")
-    :WaitForChild("Percentage")
+local STAND_UP_DELAY      = 0.5
+local BREAK_DURATION      = 2.0
+local BREAK_DEBOUNCE      = 3.0
+
+-- การตัดสิน no-flow ที่แข็งแรงกว่า
+local STABLE_TICKS        = 8          -- ต้องนิ่งหลายทิก
+local NOFLOW_TIME         = 10.0       -- ต้องนิ่งนานอย่างน้อยเท่านี้ (วินาที)
+local STRIKES_TO_RECOVER  = 3          -- ต้องเจอ no-flow ต่อเนื่องกี่ครั้งถึงจะ recover
+local RECOVERY_COOLDOWN   = 5.0        -- เวลาพักหลัง recover
+local START_GRACE_TIME    = 6.0        -- หลังเริ่ม/หลัง recover ให้เวลา settle
+
+local FAILSAFE_SECONDS    = 180        -- กันค้างยาว
+
+local FLOW_CAP_SECONDS    = 60         -- แคปตัวเลข flow บน UI
+
+---------------- Bind UI ของเกม (ปรับ path ตามเกม) ----------------
+local progressLabel = player:WaitForChild("PlayerGui")
+  :WaitForChild("ScreenGui")
+  :WaitForChild("Sidebar")
+  :WaitForChild("Stats")
+  :WaitForChild("StatsFrame")
+  :WaitForChild("LowerStats")
+  :WaitForChild("Percentage")
+
+local qiLabel = player:WaitForChild("PlayerGui")
+  :WaitForChild("ScreenGui")
+  :WaitForChild("Sidebar")
+  :WaitForChild("Stats")
+  :WaitForChild("StatsFrame")
+  :WaitForChild("UpperStats")
+  :WaitForChild("Qi")
+
+---------------- Helpers ------------------
+local function parseProgress()
+  local t = (progressLabel and progressLabel.Text) or ""
+  local numStr = t:match("([%d%.]+)") or "0"
+  local raw = tonumber(numStr) or 0
+  local percent = (t:find("%%") or raw > 1) and math.clamp(raw,0,100) or math.clamp(raw*100,0,100)
+  return percent, numStr, t
 end
 
--- Qi (จากที่คุณหาได้: "Players.<you>.PlayerGui.ScreenGui.Sidebar.Stats.StatsFrame.UpperStats.Qi")
-local function bindQiLabel()
-  return player:WaitForChild("PlayerGui")
-    :WaitForChild("ScreenGui")
-    :WaitForChild("Sidebar")
-    :WaitForChild("Stats")
-    :WaitForChild("StatsFrame")
-    :WaitForChild("UpperStats")
-    :WaitForChild("Qi")
+-- อ่าน Qi เป็น "ข้อความจริง" เพื่อรองรับทุกหน่วย
+local function getQiText()
+  local t = (qiLabel and qiLabel.Text) or ""
+  local body = t:match("Qi%s*:%s*([%d%.,%s%a]+)$") or ""
+  body = body:gsub("%s+", ""):gsub(",", "")
+  return (body ~= "" and body) or "—"
 end
 
--------------------- State -----------------------
+---------------- Bot State ----------------
 local running        = false
 local isMeditating   = false
 local isBreakingNow  = false
 local lastBreakTime  = 0
+local lastAnyBreakAt = os.clock()
 local breakCount     = 0
 
+-- สำหรับตัดสิน “ยังมีชีวิต”
+local lastAliveAt    = os.clock()     -- อัปเดตเมื่อ Qi/Progress เปลี่ยน
+local sameQiTicks    = 0
+local sameProgTicks  = 0
+local lastQiText     = getQiText()
+local _, _, lastProgText = parseProgress()
+
+local strikes        = 0              -- นับจำนวนครั้ง no-flow ต่อเนื่อง
 local lastRecoverTry = 0
-local lastAnyBreakAt = os.clock()
+local startOrRecoverAt = os.clock()   -- ใช้ grace ช่วงเริ่ม/หลัง recover
 
-local progressLabel  = nil
-local qiLabel        = nil
-
-local lastPercent    = nil
-local lastChangeAt   = os.clock()
-
-local lastQi         = 0
-local lastQiAt       = os.clock()
-
-local minimized      = false
-local THEME          = DEFAULTS.THEME
-local soundOn        = true
-
--------------------- Utils -----------------------
-local function pushNotify(msg)
-  pcall(function()
-    StarterGui:SetCore("SendNotification", {Title="CultivateBot", Text=msg, Duration=2.5})
-  end)
-end
-
-local function fire(action)
-  local ok, err = pcall(function() CultivationEvent:FireServer(action) end)
-  if not ok then warn("[CultivateBot] Fire failed:", action, err) end
-end
-
-local function parseProgress()
-  if not progressLabel then return 0,"0" end
-  local t = progressLabel.Text or ""
-  local numStr = t:match("Progress%s*:%s*([%d%.]+)") or t:match("([%d%.]+)") or "0"
-  local raw = tonumber(numStr) or 0
-  local percent = (t:find("%%") or raw>1) and math.clamp(raw,0,100) or math.clamp(raw*100,0,100)
-  local original = t:find("%%") and (numStr.."%") or numStr
-  return percent, original
-end
-
--- Qi parser (รองรับ K/M/B/T/Q)
-local mult = {K=1e3, M=1e6, B=1e9, T=1e12, Q=1e15}
-local function parseQi()
-  if not qiLabel then return 0 end
-  local t = qiLabel.Text or ""
-  local num = t:match("Qi%s*:%s*([%d%.]+)") or "0"
-  local suf = t:match("Qi%s*:%s*[%d%.]+%s*([KMBTQ])") or ""
-  local v = tonumber(num) or 0
-  if mult[suf] then v = v*mult[suf] end
-  return v
-end
-
-local function fmtSuffix(n)
-  if n >= 1e15 then return string.format("%.2fQ", n/1e15)
-  elseif n >= 1e12 then return string.format("%.2fT", n/1e12)
-  elseif n >= 1e9 then return string.format("%.2fB", n/1e9)
-  elseif n >= 1e6 then return string.format("%.2fM", n/1e6)
-  elseif n >= 1e3 then return string.format("%.2fK", n/1e3)
-  else return string.format("%.0f", n) end
-end
-
--------------------- Actions ---------------------
+local function fire(action) pcall(function() CultivationEvent:FireServer(action) end) end
 local function startMeditate()
   if not isMeditating and not isBreakingNow then
-    fire("Cultivate")
-    isMeditating = true
+    fire("Cultivate"); isMeditating = true
+    -- ให้เวลา settle ช่วงเปลี่ยนสถานะ
+    startOrRecoverAt = os.clock()
   end
 end
-
 local function stopMeditate()
   if isMeditating then
-    fire("Cultivate")
-    isMeditating = false
+    fire("Cultivate"); isMeditating = false
   end
 end
-
 local function doBreakthroughCycle()
   if isBreakingNow then return end
-  if os.clock() - lastBreakTime <= DEFAULTS.BREAK_DEBOUNCE then return end
+  if os.clock() - lastBreakTime <= BREAK_DEBOUNCE then return end
   isBreakingNow = true
-  stopMeditate()
-  task.wait(DEFAULTS.STAND_UP_DELAY)
+  stopMeditate(); task.wait(STAND_UP_DELAY)
   fire("Breakthrough")
-  lastBreakTime = os.clock()
+  lastBreakTime  = os.clock()
   lastAnyBreakAt = os.clock()
-  task.wait(DEFAULTS.BREAK_DURATION)
+  task.wait(BREAK_DURATION)
   startMeditate()
   isBreakingNow = false
   breakCount += 1
 end
 
--------------------- THEME -----------------------
-local P = {
-  cream = {
-    panel   = Color3.fromRGB(250,244,234),
-    card    = Color3.fromRGB(255,249,240),
-    headA   = Color3.fromRGB(252,234,210),
-    headB   = Color3.fromRGB(244,221,192),
-    stroke  = Color3.fromRGB(214,179,117),
-    text    = Color3.fromRGB(100,70,40),
-    accentA = Color3.fromRGB(255,190,120),
-    accentB = Color3.fromRGB(235,110,80),
-    ribbon  = Color3.fromRGB(248,223,184),
-    statusWait = Color3.fromRGB(120,90,60),
-    statusMed  = Color3.fromRGB(40,160,120),
-    statusBreak= Color3.fromRGB(200,100,40),
-    barBg  = Color3.fromRGB(240,220,190),
-    barFg  = Color3.fromRGB(230,160,60),
-    ok     = Color3.fromRGB(40,200,120),
-    warn   = Color3.fromRGB(240,180,60),
-    bad    = Color3.fromRGB(220,80,60),
-  },
-  jade = {
-    panel   = Color3.fromRGB(26,32,36),
-    card    = Color3.fromRGB(32,40,46),
-    headA   = Color3.fromRGB(46,58,64),
-    headB   = Color3.fromRGB(38,50,56),
-    stroke  = Color3.fromRGB(170,140,70),
-    text    = Color3.fromRGB(230,230,220),
-    accentA = Color3.fromRGB(70,180,150),
-    accentB = Color3.fromRGB(40,130,110),
-    ribbon  = Color3.fromRGB(36,44,48),
-    statusWait = Color3.fromRGB(200,200,190),
-    statusMed  = Color3.fromRGB(120,200,170),
-    statusBreak= Color3.fromRGB(255,170,90),
-    barBg  = Color3.fromRGB(55,65,70),
-    barFg  = Color3.fromRGB(70,180,150),
-    ok     = Color3.fromRGB(120,210,170),
-    warn   = Color3.fromRGB(230,190,80),
-    bad    = Color3.fromRGB(255,120,100),
-  }
-}
-local palette = P[THEME] or P.cream
-
--------------------- UI --------------------------
-local gui = Instance.new("ScreenGui")
-gui.Name = "CultivateBot_UI"
-gui.ResetOnSpawn = false
-gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-gui.Parent = pg
-
--- Root
-local root = Instance.new("Frame")
-root.Size = UDim2.fromOffset(780, 240)
-root.Position = UDim2.new(0, 40, 0, 110)
-root.BackgroundColor3 = palette.panel
-root.BorderSizePixel = 0
-root.Parent = gui
-Instance.new("UICorner", root).CornerRadius = UDim.new(0, 18)
-local rootStroke = Instance.new("UIStroke", root) rootStroke.Color = palette.stroke rootStroke.Thickness = 2
-
-local shadow = Instance.new("ImageLabel")
-shadow.BackgroundTransparency = 1
-shadow.Image = "rbxassetid://1316045217"
-shadow.ImageTransparency = 0.72
-shadow.ImageColor3 = Color3.new(0,0,0)
-shadow.ScaleType = Enum.ScaleType.Slice
-shadow.SliceCenter = Rect.new(10,10,118,118)
-shadow.Size = UDim2.new(1,30,1,30)
-shadow.Position = UDim2.fromOffset(-15,-15)
-shadow.Parent = root
-
--- Ribbon
-local ribbon = Instance.new("Frame")
-ribbon.Size = UDim2.new(0, 64, 1, -28)
-ribbon.Position = UDim2.fromOffset(-12, 14)
-ribbon.BackgroundColor3 = palette.ribbon
-ribbon.BorderSizePixel = 0
-ribbon.Parent = root
-Instance.new("UICorner", ribbon).CornerRadius = UDim.new(0, 12)
-local ribStroke = Instance.new("UIStroke", ribbon) ribStroke.Color = palette.stroke
-
-local ribbonText = Instance.new("TextLabel")
-ribbonText.BackgroundTransparency = 1
-ribbonText.Size = UDim2.new(1,0,1,0)
-ribbonText.Font = Enum.Font.GothamBlack
-ribbonText.TextSize = 18
-ribbonText.TextColor3 = palette.text
-ribbonText.TextWrapped = true
-ribbonText.Text = "Culti\nvate\n福利"
-ribbonText.Parent = ribbon
-
--- Header
-local header = Instance.new("Frame")
-header.Size = UDim2.new(1,-78,0,50)
-header.Position = UDim2.fromOffset(66,8)
-header.BackgroundColor3 = palette.headA
-header.BorderSizePixel = 0
-header.Parent = root
-Instance.new("UICorner", header).CornerRadius = UDim.new(0, 12)
-local hStroke = Instance.new("UIStroke", header) hStroke.Color = palette.stroke
-local hGrad = Instance.new("UIGradient", header)
-hGrad.Color = ColorSequence.new{
-  ColorSequenceKeypoint.new(0, palette.headA),
-  ColorSequenceKeypoint.new(1, palette.headB)
-}
-hGrad.Rotation = 90
-
-local title = Instance.new("TextLabel")
-title.BackgroundTransparency = 1
-title.Size = UDim2.new(1,-220,1,0)
-title.Position = UDim2.fromOffset(14,0)
-title.Font = Enum.Font.GothamSemibold
-title.TextXAlignment = Enum.TextXAlignment.Left
-title.TextSize = 20
-title.TextColor3 = palette.text
-title.Text = "Cultivate Bot"
-title.Parent = header
-
-local function mkSmallBtn(txt)
-  local b = Instance.new("TextButton")
-  b.Size = UDim2.fromOffset(32, 30)
-  b.BackgroundColor3 = palette.accentA
-  b.Text = txt
-  b.Font = Enum.Font.GothamBold
-  b.TextSize = 16
-  b.TextColor3 = Color3.new(1,1,1)
-  b.Parent = header
-  Instance.new("UICorner", b).CornerRadius = UDim.new(0, 8)
-  local st = Instance.new("UIStroke", b) st.Color = palette.stroke
-  return b
-end
-
-local btnTheme = mkSmallBtn("🎨"); btnTheme.Position = UDim2.new(1,-180,0.5,-15)
-local btnRebind = mkSmallBtn("🔄"); btnRebind.Position = UDim2.new(1,-140,0.5,-15)
-local btnMin    = mkSmallBtn("—");  btnMin.Position    = UDim2.new(1,-100,0.5,-15)
-
-local btnToggle = Instance.new("TextButton")
-btnToggle.Size = UDim2.fromOffset(110, 34)
-btnToggle.Position = UDim2.new(1, -110-12, 0.5, -17)
-btnToggle.BackgroundColor3 = palette.accentB
-btnToggle.Text = "Start"
-btnToggle.TextColor3 = Color3.new(1,1,1)
-btnToggle.Font = Enum.Font.GothamSemibold
-btnToggle.TextSize = 16
-btnToggle.Parent = header
-Instance.new("UICorner", btnToggle).CornerRadius = UDim.new(0, 12)
-local stToggle = Instance.new("UIStroke", btnToggle) stToggle.Color = palette.stroke
-local gradToggle = Instance.new("UIGradient", btnToggle)
-gradToggle.Color = ColorSequence.new{
-  ColorSequenceKeypoint.new(0, palette.accentA),
-  ColorSequenceKeypoint.new(1, palette.accentB)
-}
-gradToggle.Rotation = 0
-
--- Drag + snap
+---------------- UI (Lite/Draggable/Toggle) ----------------
+local UI = {}
 do
+  local gui = Instance.new("ScreenGui")
+  gui.Name = "CultivateBotLite"
+  gui.ResetOnSpawn = false
+  gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+  gui.DisplayOrder = 1000
+  gui.Parent = pg
+
+  local main = Instance.new("Frame")
+  main.Size = UDim2.fromOffset(460, 230)
+  main.Position = UDim2.new(0.5, -230, 0.18, 0)
+  main.BackgroundColor3 = Color3.fromRGB(250,245,235)
+  main.BorderSizePixel = 0
+  main.Parent = gui
+  Instance.new("UICorner", main).CornerRadius = UDim.new(0, 12)
+  local stroke = Instance.new("UIStroke", main) stroke.Color = Color3.fromRGB(200,180,150) stroke.Thickness = 2
+
+  local title = Instance.new("TextLabel", main)
+  title.BackgroundTransparency = 1
+  title.Size = UDim2.new(1, -40, 0, 40)
+  title.Position = UDim2.fromOffset(16, 10)
+  title.Font = Enum.Font.GothamBlack
+  title.TextSize = 22
+  title.TextXAlignment = Enum.TextXAlignment.Left
+  title.TextColor3 = Color3.fromRGB(80,50,20)
+  title.Text = "🌿 Cultivate Bot"
+
+  local closeBtn = Instance.new("TextButton", main)
+  closeBtn.Size = UDim2.fromOffset(30, 30)
+  closeBtn.Position = UDim2.new(1, -35, 0, 5)
+  closeBtn.BackgroundColor3 = Color3.fromRGB(220,80,80)
+  closeBtn.Text = "X"
+  closeBtn.TextColor3 = Color3.new(1,1,1)
+  closeBtn.Font = Enum.Font.GothamBold
+  closeBtn.TextSize = 18
+  Instance.new("UICorner", closeBtn).CornerRadius = UDim.new(0, 8)
+
+  local btn = Instance.new("TextButton", main)
+  btn.Size = UDim2.fromOffset(140, 46)
+  btn.Position = UDim2.new(1, -156, 0, 54)
+  btn.BackgroundColor3 = Color3.fromRGB(240,120,100)
+  btn.Text = "Start"
+  btn.TextColor3 = Color3.new(1,1,1)
+  btn.Font = Enum.Font.GothamBold
+  btn.TextSize = 20
+  Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 10)
+
+  local status = Instance.new("TextLabel", main)
+  status.BackgroundTransparency = 1
+  status.Size = UDim2.new(1, -32, 0, 28)
+  status.Position = UDim2.fromOffset(20, 104)
+  status.Font = Enum.Font.Gotham
+  status.TextSize = 18
+  status.TextXAlignment = Enum.TextXAlignment.Left
+  status.TextColor3 = Color3.fromRGB(60,60,60)
+  status.Text = "🟡 Status: Waiting..."
+
+  local pText = Instance.new("TextLabel", main)
+  pText.BackgroundTransparency = 1
+  pText.Size = UDim2.new(1, -32, 0, 22)
+  pText.Position = UDim2.fromOffset(20, 134)
+  pText.Font = Enum.Font.Gotham
+  pText.TextSize = 16
+  pText.TextXAlignment = Enum.TextXAlignment.Left
+  pText.TextColor3 = Color3.fromRGB(60,60,60)
+  pText.Text = "Progress: — (0%)"
+
+  local qiLine = Instance.new("TextLabel", main)
+  qiLine.BackgroundTransparency = 1
+  qiLine.Size = UDim2.new(1, -32, 0, 22)
+  qiLine.Position = UDim2.fromOffset(20, 158)
+  qiLine.Font = Enum.Font.Gotham
+  qiLine.TextSize = 16
+  qiLine.TextXAlignment = Enum.TextXAlignment.Left
+  qiLine.TextColor3 = Color3.fromRGB(60,60,60)
+  qiLine.Text = "Qi: —  (flow: —)"
+
+  local breaksLbl = Instance.new("TextLabel", main)
+  breaksLbl.BackgroundTransparency = 1
+  breaksLbl.Size = UDim2.new(1, -32, 0, 22)
+  breaksLbl.Position = UDim2.fromOffset(20, 182)
+  breaksLbl.Font = Enum.Font.Gotham
+  breaksLbl.TextSize = 16
+  breaksLbl.TextXAlignment = Enum.TextXAlignment.Left
+  breaksLbl.TextColor3 = Color3.fromRGB(60,60,60)
+  breaksLbl.Text = "⚡ Breaks: 0"
+
+  -- Dragging
   local dragging, dragStart, startPos
-  header.InputBegan:Connect(function(i)
-    if i.UserInputType==Enum.UserInputType.MouseButton1 then
-      dragging=true; dragStart=i.Position; startPos=root.Position
+  main.InputBegan:Connect(function(i)
+    if i.UserInputType == Enum.UserInputType.MouseButton1 then
+      dragging = true; dragStart = i.Position; startPos = main.Position
     end
   end)
-  header.InputEnded:Connect(function(i)
-    if i.UserInputType==Enum.UserInputType.MouseButton1 then
-      dragging=false
-      local vp = workspace.CurrentCamera.ViewportSize
-      local x = math.clamp(root.Position.X.Offset, 10, vp.X - root.Size.X.Offset - 10)
-      local y = math.clamp(root.Position.Y.Offset, 10, vp.Y - 80)
-      root.Position = UDim2.fromOffset(x,y)
+  main.InputChanged:Connect(function(i)
+    if i.UserInputType == Enum.UserInputType.MouseMovement and dragging then
+      local d = i.Position - dragStart
+      main.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X,
+                                startPos.Y.Scale, startPos.Y.Offset + d.Y)
     end
   end)
-  UIS.InputChanged:Connect(function(i)
-    if dragging and i.UserInputType==Enum.UserInputType.MouseMovement then
-      local d=i.Position-dragStart
-      root.Position=UDim2.new(startPos.X.Scale,startPos.X.Offset+d.X,startPos.Y.Scale,startPos.Y.Offset+d.Y)
+  UIS.InputEnded:Connect(function(i)
+    if i.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end
+  end)
+
+  local function setBtn()
+    if running then btn.Text="Stop"; btn.BackgroundColor3 = Color3.fromRGB(100,180,120)
+    else btn.Text="Start"; btn.BackgroundColor3 = Color3.fromRGB(240,120,100) end
+  end
+
+  function UI.updateHUD(pct, pctText, qiText)
+    pText.Text = string.format("Progress: %s (%d%%)", pctText, math.floor(pct+0.5))
+    if isBreakingNow then status.Text = "🟠 Status: Breaking..."
+    elseif isMeditating then status.Text = "🟢 Status: Meditating..."
+    elseif running then status.Text = "🟡 Status: Running..."
+    else status.Text = "🔴 Status: Stopped" end
+
+    local flow = math.min(os.clock() - lastAliveAt, FLOW_CAP_SECONDS)
+    qiLine.Text    = string.format("Qi: %s  (flow: %.1fs ago)", qiText or "—", flow)
+    breaksLbl.Text = ("⚡ Breaks: %d"):format(breakCount)
+  end
+
+  function UI.toggleRun()
+    running = not running
+    setBtn()
+    StarterGui:SetCore("SendNotification", {Title="CultivateBot", Text=(running and "Started" or "Stopped"), Duration=2})
+    -- ให้ grace ตอนเริ่ม
+    startOrRecoverAt = os.clock()
+    lastAliveAt      = os.clock()
+    sameQiTicks, sameProgTicks, strikes = 0, 0, 0
+  end
+
+  btn.MouseButton1Click:Connect(UI.toggleRun)
+  closeBtn.MouseButton1Click:Connect(function() main.Visible = false end)
+  UIS.InputBegan:Connect(function(input, gp)
+    if gp then return end
+    if input.KeyCode == Enum.KeyCode.F8 then UI.toggleRun() end
+    if input.KeyCode == Enum.KeyCode.RightShift then main.Visible = not main.Visible end
+  end)
+
+  setBtn()
+end
+
+-- Hook: ถ้า Qi text เปลี่ยน ถือว่า alive
+if qiLabel then
+  qiLabel:GetPropertyChangedSignal("Text"):Connect(function()
+    local qt = getQiText()
+    if qt ~= lastQiText then
+      lastQiText  = qt
+      lastAliveAt = os.clock()
+      sameQiTicks = 0
     end
   end)
 end
 
--- Content (3 cards responsive)
-local content = Instance.new("Frame")
-content.BackgroundTransparency = 1
-content.Size = UDim2.new(1,-92,1,-88)
-content.Position = UDim2.fromOffset(80,74)
-content.Parent = root
-local grid = Instance.new("UIGridLayout", content)
-grid.CellPadding = UDim2.fromOffset(12,12)
-grid.FillDirectionMaxCells = 3
-grid.CellSize = UDim2.new(1/3,-8,1,-8)
-local function updateResponsive()
-  local vx = workspace.CurrentCamera.ViewportSize.X
-  if vx < 900 then grid.FillDirectionMaxCells = 2; grid.CellSize = UDim2.new(1/2,-8,1,-8)
-  else grid.FillDirectionMaxCells = 3; grid.CellSize = UDim2.new(1/3,-8,1,-8) end
-end
-workspace.CurrentCamera:GetPropertyChangedSignal("ViewportSize"):Connect(updateResponsive)
-updateResponsive()
-
-local function mkCard(titleText, icon)
-  local card = Instance.new("Frame")
-  card.BackgroundColor3 = palette.card
-  card.BorderSizePixel = 0
-  Instance.new("UICorner", card).CornerRadius = UDim.new(0, 14)
-  local cStroke = Instance.new("UIStroke", card) cStroke.Color = palette.stroke cStroke.Thickness = 2
-
-  local head = Instance.new("Frame", card)
-  head.Size = UDim2.new(1,-20,0,42)
-  head.Position = UDim2.fromOffset(10,10)
-  head.BackgroundColor3 = palette.headA
-  head.BorderSizePixel = 0
-  Instance.new("UICorner", head).CornerRadius = UDim.new(0, 10)
-  local hst = Instance.new("UIStroke", head) hst.Color = palette.stroke
-  local hgrad = Instance.new("UIGradient", head)
-  hgrad.Color = ColorSequence.new{
-    ColorSequenceKeypoint.new(0, palette.headA),
-    ColorSequenceKeypoint.new(1, palette.headB)
-  }
-  hgrad.Rotation = 90
-
-  local tl = Instance.new("TextLabel", head)
-  tl.BackgroundTransparency = 1
-  tl.Size = UDim2.new(1,0,1,0)
-  tl.Font = Enum.Font.GothamBold
-  tl.TextSize = 16
-  tl.TextColor3 = palette.text
-  tl.Text = (icon or "").."  "..titleText
-
-  local body = Instance.new("Frame", card)
-  body.Size = UDim2.new(1,-20,1,-64)
-  body.Position = UDim2.fromOffset(10,56)
-  body.BackgroundTransparency = 1
-
-  return card, body
-end
-
--- Card 1: Status
-local cardStatus, bodyStatus = mkCard("สถานะ", "🧘"); cardStatus.Parent = content
-
-local statusIcon = Instance.new("TextLabel", bodyStatus)
-statusIcon.BackgroundTransparency=1; statusIcon.Size=UDim2.new(0,24,0,24)
-statusIcon.Font=Enum.Font.GothamBold; statusIcon.TextSize=18; statusIcon.Text="⏳"; statusIcon.TextColor3=palette.text
-
-local statusLabel = Instance.new("TextLabel", bodyStatus)
-statusLabel.BackgroundTransparency=1; statusLabel.Position=UDim2.fromOffset(28,0)
-statusLabel.Size=UDim2.new(1,-28,0,24); statusLabel.Font=Enum.Font.Gotham
-statusLabel.TextXAlignment=Enum.TextXAlignment.Left; statusLabel.TextSize=14
-statusLabel.TextColor3=palette.statusWait; statusLabel.Text="Status: Waiting..."
-
-local progressText = Instance.new("TextLabel", bodyStatus)
-progressText.BackgroundTransparency=1; progressText.Position=UDim2.fromOffset(0,26)
-progressText.Size=UDim2.new(1,0,0,20); progressText.Font=Enum.Font.Gotham
-progressText.TextXAlignment=Enum.TextXAlignment.Left; progressText.TextSize=14
-progressText.TextColor3=palette.text; progressText.Text="Progress: — (0%)"
-
-local barBg = Instance.new("Frame", bodyStatus)
-barBg.Position=UDim2.fromOffset(0,50); barBg.Size=UDim2.new(1,-10,0,14)
-barBg.BackgroundColor3=palette.barBg; barBg.BorderSizePixel=0
-Instance.new("UICorner", barBg).CornerRadius=UDim.new(0,7)
-local barFill = Instance.new("Frame", barBg)
-barFill.Size=UDim2.new(0,0,1,0); barFill.BackgroundColor3=palette.barFg; barFill.BorderSizePixel=0
-Instance.new("UICorner", barFill).CornerRadius=UDim.new(0,7)
-
-local errorLabel = Instance.new("TextLabel", bodyStatus)
-errorLabel.BackgroundTransparency=1; errorLabel.Position=UDim2.fromOffset(0,70)
-errorLabel.Size=UDim2.new(1,0,0,18); errorLabel.Font=Enum.Font.Gotham
-errorLabel.TextXAlignment=Enum.TextXAlignment.Left; errorLabel.TextSize=12
-errorLabel.TextColor3=Color3.fromRGB(200,60,60); errorLabel.Text=""
-
--- Qi row
-local qiRow = Instance.new("Frame", bodyStatus)
-qiRow.Position=UDim2.fromOffset(0,90); qiRow.Size=UDim2.new(1,0,0,22); qiRow.BackgroundTransparency=1
-local qiDot = Instance.new("Frame", qiRow)
-qiDot.Size=UDim2.fromOffset(14,14); qiDot.Position=UDim2.fromOffset(0,4)
-qiDot.BackgroundColor3=Color3.fromRGB(160,160,160); qiDot.BorderSizePixel=0
-Instance.new("UICorner", qiDot).CornerRadius=UDim.new(1,7)
-local qiText = Instance.new("TextLabel", qiRow)
-qiText.BackgroundTransparency=1; qiText.Position=UDim2.fromOffset(20,0)
-qiText.Size=UDim2.new(1,-20,1,0); qiText.Font=Enum.Font.Gotham
-qiText.TextXAlignment=Enum.TextXAlignment.Left; qiText.TextSize=14
-qiText.TextColor3=palette.text; qiText.Text="Qi: —  (flow: —)"
-
--- Card 2: Control
-local cardControl, bodyControl = mkCard("ควบคุม", "⚙️"); cardControl.Parent = content
-local bigNumber = Instance.new("TextLabel", bodyControl)
-bigNumber.BackgroundTransparency=1; bigNumber.Size=UDim2.new(1,0,0,34)
-bigNumber.Font=Enum.Font.GothamBlack; bigNumber.TextSize=26
-bigNumber.TextColor3=palette.barFg; bigNumber.Text="⚡ Breaks: 0"
-
-local actBtn = Instance.new("TextButton", bodyControl)
-actBtn.Size=UDim2.fromOffset(160,42); actBtn.Position=UDim2.fromOffset(0,38)
-actBtn.BackgroundColor3=palette.accentB; actBtn.Text="Start"; actBtn.TextColor3=Color3.new(1,1,1)
-actBtn.Font=Enum.Font.GothamSemibold; actBtn.TextSize=18
-Instance.new("UICorner", actBtn).CornerRadius=UDim.new(0,12)
-local actStroke = Instance.new("UIStroke", actBtn) actStroke.Color=palette.stroke
-local actGrad = Instance.new("UIGradient", actBtn)
-actGrad.Color=ColorSequence.new{
-  ColorSequenceKeypoint.new(0, palette.accentA),
-  ColorSequenceKeypoint.new(1, palette.accentB)
-}; actGrad.Rotation=0
-actBtn.MouseEnter:Connect(function() TweenS:Create(actBtn, TweenInfo.new(0.12), {Size=UDim2.fromOffset(168,46)}):Play() end)
-actBtn.MouseLeave:Connect(function() TweenS:Create(actBtn, TweenInfo.new(0.12), {Size=UDim2.fromOffset(160,42)}):Play() end)
-
-local tip = Instance.new("TextLabel", bodyControl)
-tip.BackgroundTransparency=1; tip.Position=UDim2.fromOffset(0,84)
-tip.Size=UDim2.new(1,0,0,18); tip.Font=Enum.Font.Gotham; tip.TextSize=12
-tip.TextColor3=palette.text; tip.Text="F8: Start/Stop · RightShift: ซ่อน/แสดง"
-
--- Card 3: Info
-local cardInfo, bodyInfo = mkCard("ข้อมูล", "ℹ️"); cardInfo.Parent = content
-local lastBreakText = Instance.new("TextLabel", bodyInfo)
-lastBreakText.BackgroundTransparency=1; lastBreakText.Size=UDim2.new(1,0,0,22)
-lastBreakText.Font=Enum.Font.Gotham; lastBreakText.TextXAlignment=Enum.TextXAlignment.Left
-lastBreakText.TextSize=14; lastBreakText.TextColor3=palette.text; lastBreakText.Text="สุดท้าย: -"
-
-local cooldownText = Instance.new("TextLabel", bodyInfo)
-cooldownText.BackgroundTransparency=1; cooldownText.Position=UDim2.fromOffset(0,22)
-cooldownText.Size=UDim2.new(1,0,0,22); cooldownText.Font=Enum.Font.Gotham
-cooldownText.TextXAlignment=Enum.TextXAlignment.Left; cooldownText.TextSize=14
-cooldownText.TextColor3=palette.text; cooldownText.Text="Cooldown: 0.0s"
-
-local remoteStatus = Instance.new("TextLabel", bodyInfo)
-remoteStatus.BackgroundTransparency=1; remoteStatus.Position=UDim2.fromOffset(0,44)
-remoteStatus.Size=UDim2.new(1,0,0,20); remoteStatus.Font=Enum.Font.Gotham
-remoteStatus.TextSize=14; remoteStatus.TextXAlignment=Enum.TextXAlignment.Left
-remoteStatus.TextColor3=palette.text; remoteStatus.Text="Remote: "..(CultivationEvent and "🟢 OK" or "🔴 Missing")
-
-local logBox = Instance.new("TextLabel", bodyInfo)
-logBox.BackgroundTransparency=1; logBox.Position=UDim2.fromOffset(0,66)
-logBox.Size=UDim2.new(1,0,0,50); logBox.Font=Enum.Font.Gotham; logBox.TextSize=12
-logBox.TextXAlignment=Enum.TextXAlignment.Left; logBox.TextYAlignment=Enum.TextYAlignment.Top
-logBox.TextColor3=palette.text; logBox.TextWrapped=true; logBox.Text="-"
-local logs = {}
-local function pushLog(s)
-  table.insert(logs, 1, string.format("[%s] %s", os.date("!%H:%M:%S"), s))
-  while #logs>5 do table.remove(logs) end
-  logBox.Text = table.concat(logs, "\n")
-end
-
--- Minimize
-btnMin.MouseButton1Click:Connect(function()
-  minimized = not minimized
-  local toH = minimized and 86 or 240
-  TweenS:Create(root, TweenInfo.new(0.2), {Size=UDim2.fromOffset(780,toH)}):Play()
-  content.Visible = not minimized
-  btnToggle.Visible = not minimized
-  btnMin.Text = minimized and "+" or "—"
-end)
-
--- Theme switch
-local function applyTheme(newTheme)
-  THEME = newTheme; palette = P[THEME] or P.cream
-  root.BackgroundColor3=palette.panel; rootStroke.Color=palette.stroke
-  ribbon.BackgroundColor3=palette.ribbon; ribStroke.Color=palette.stroke
-  header.BackgroundColor3=palette.headA; hStroke.Color=palette.stroke
-  hGrad.Color = ColorSequence.new{
-    ColorSequenceKeypoint.new(0, palette.headA),
-    ColorSequenceKeypoint.new(1, palette.headB)
-  }
-  title.TextColor3=palette.text
-  for _,card in ipairs({cardStatus,cardControl,cardInfo}) do
-    card.BackgroundColor3=palette.card; card.UIStroke.Color=palette.stroke
-    local head=card:GetChildren()[1]; head.BackgroundColor3=palette.headA; head.UIStroke.Color=palette.stroke; head.UIGradient.Color=hGrad.Color
-    head.TextLabel.TextColor3=palette.text
-  end
-  statusLabel.TextColor3=palette.statusWait
-  progressText.TextColor3=palette.text; barBg.BackgroundColor3=palette.barBg; barFill.BackgroundColor3=palette.barFg
-  bigNumber.TextColor3=palette.barFg
-  actStroke.Color=palette.stroke
-  actGrad.Color=ColorSequence.new{ColorSequenceKeypoint.new(0,palette.accentA),ColorSequenceKeypoint.new(1,palette.accentB)}
-  stToggle.Color=palette.stroke; gradToggle.Color=actGrad.Color
-  tip.TextColor3=palette.text; lastBreakText.TextColor3=palette.text; cooldownText.TextColor3=palette.text
-  remoteStatus.TextColor3=palette.text; logBox.TextColor3=palette.text; ribbonText.TextColor3=palette.text
-end
-applyTheme(THEME)
-btnTheme.MouseButton1Click:Connect(function() applyTheme(THEME=="cream" and "jade" or "cream") end)
-
--------------------- Controls --------------------
-local function setStatus(txt, col, icon)
-  statusLabel.Text = "Status: "..txt
-  statusLabel.TextColor3 = col
-  statusIcon.Text = icon or "⏳"
-end
-
-local function setRunning(on, silent)
-  running = on
-  btnToggle.Text, actBtn.Text = (on and "Stop" or "Start"), (on and "Stop" or "Start")
-  gradToggle.Color = ColorSequence.new{
-    ColorSequenceKeypoint.new(0, palette.accentA),
-    ColorSequenceKeypoint.new(1, on and palette.accentB or palette.accentA)
-  }
-  actGrad.Color = gradToggle.Color
-  if not silent then pushNotify(on and "Bot Started" or "Bot Stopped") end
-  if not on then setStatus("Idle", palette.statusWait, "⏳") end
-end
-
-btnToggle.MouseButton1Click:Connect(function() setRunning(not running) end)
-actBtn.MouseButton1Click:Connect(function() setRunning(not running) end)
-
-UIS.InputBegan:Connect(function(input,gp)
-  if gp then return end
-  if input.KeyCode==Enum.KeyCode.RightShift then
-    root.Visible = not root.Visible
-  elseif input.KeyCode==Enum.KeyCode.F8 then
-    setRunning(not running)
-  end
-end)
-
-btnRebind.MouseButton1Click:Connect(function()
-  progressLabel = bindProgressLabel()
-  qiLabel = bindQiLabel()
-  pushLog("Rebind complete.")
-end)
-
--------------------- HUD update ------------------
-local function updateHUD(percent, original)
-  progressText.Text = string.format("Progress: %s (%d%%)", original, math.floor(percent+0.5))
-  barFill.Size = UDim2.new(percent/100,0,1,0)
-
-  if not progressLabel then
-    errorLabel.Text = "❌ ยังหา Progress UI ไม่เจอ (เปิดหน้า Stats)"
-  else errorLabel.Text = "" end
-
-  -- สถานะจาก state
-  if isBreakingNow then
-    setStatus("Breaking...", palette.statusBreak, "🟠")
-  elseif isMeditating then
-    setStatus("Meditating...", palette.statusMed, "🟢")
-  else
-    setStatus("Waiting...", palette.statusWait, "⏳")
-  end
-
-  bigNumber.Text = ("⚡ Breaks: %d"):format(breakCount)
-  if lastBreakTime>0 then lastBreakText.Text = ("สุดท้าย: %.1fs ที่แล้ว"):format(os.clock()-lastBreakTime) end
-  local left = math.max(0, DEFAULTS.BREAK_DEBOUNCE - (os.clock()-lastBreakTime))
-  cooldownText.Text = ("Cooldown: %.1fs"):format(left)
-  remoteStatus.Text = "Remote: "..(CultivationEvent and "🟢 OK" or "🔴 Missing")
-
-  -- Qi view
-  local q = parseQi()
-  qiText.Text = string.format("Qi: %s  (flow: %.1fs ago)", fmtSuffix(q), os.clock()-lastQiAt)
-  local dt = os.clock() - lastQiAt
-  qiDot.BackgroundColor3 = dt<=2 and palette.ok or (dt<=6 and palette.warn or palette.bad)
-end
-
--------------------- Binding labels --------------
-local function tryBindLabels()
-  progressLabel = progressLabel or bindProgressLabel()
-  qiLabel       = qiLabel       or bindQiLabel()
-  if progressLabel then
-    progressLabel:GetPropertyChangedSignal("Text"):Connect(function()
-      local p,o = parseProgress(); updateHUD(p,o)
-    end)
-  end
-  if qiLabel then
-    qiLabel:GetPropertyChangedSignal("Text"):Connect(function()
-      local v = parseQi()
-      if v>lastQi then lastQi=v; lastQiAt=os.clock() end
-      local p,o = parseProgress(); updateHUD(p,o)
-    end)
-  end
-end
-tryBindLabels()
-
--- เผื่อ UI โผล่ช้า
-pg.DescendantAdded:Connect(function(d)
-  if not progressLabel and d:IsA("TextLabel") and d.Name=="Percentage" then
-    progressLabel = d
-  end
-  if not qiLabel and d:IsA("TextLabel") and d.Name=="Qi" then
-    qiLabel = d
-  end
-end)
-
-player.CharacterAdded:Connect(function()
-  progressLabel=nil; qiLabel=nil
-  task.defer(tryBindLabels)
-end)
-
--------------------- Main loop -------------------
+---------------- Main Loop ----------------
 task.spawn(function()
   while true do
     if running then
-      if not progressLabel or not qiLabel then tryBindLabels() end
+      -- Progress
+      local pct, pctText, progFullText = parseProgress()
 
-      local pct, original = parseProgress()
-      local qiVal = parseQi()
-
-      -- Qi ไหล = นั่งอยู่
-      if qiVal > lastQi then
-        lastQi = qiVal
-        lastQiAt = os.clock()
+      -- ถ้า progress ขยับ => ถือว่า alive
+      if progFullText ~= lastProgText then
+        lastProgText = progFullText
+        lastAliveAt  = os.clock()
+        sameProgTicks = 0
+      else
+        sameProgTicks += 1
       end
 
+      -- Qi (string-based)
+      local qiNowText = getQiText()
+      if qiNowText ~= lastQiText then
+        lastQiText  = qiNowText
+        lastAliveAt = os.clock()
+        sameQiTicks = 0
+      else
+        sameQiTicks += 1
+      end
+
+      -- เงื่อนไข no-flow (ต้องผ่าน grace ช่วงเริ่มด้วย)
+      local pastGrace   = (os.clock() - startOrRecoverAt) > START_GRACE_TIME
+      local ticksQuiet  = (sameQiTicks >= STABLE_TICKS) and (sameProgTicks >= STABLE_TICKS)
+      local timeQuiet   = (os.clock() - lastAliveAt) > NOFLOW_TIME
+
+      if pastGrace and ticksQuiet and timeQuiet and not isBreakingNow then
+        -- นับ strikes ก่อน recover
+        strikes += 1
+        if strikes >= STRIKES_TO_RECOVER and (os.clock() - lastRecoverTry) > RECOVERY_COOLDOWN then
+          fire("Cultivate")                  -- กดนั่งใหม่
+          isMeditating    = true
+          lastRecoverTry  = os.clock()
+          startOrRecoverAt= os.clock()       -- เริ่ม grace ใหม่
+          lastAliveAt     = os.clock()
+          sameQiTicks, sameProgTicks, strikes = 0, 0, 0
+        end
+      else
+        -- มีชีวิตอยู่จริง รีเซ็ต strikes
+        if (os.clock() - lastAliveAt) <= NOFLOW_TIME then
+          strikes = 0
+        end
+      end
+
+      -- Break เมื่อเต็ม
       if pct >= 100 then
         doBreakthroughCycle()
       else
-        -- ถ้า Qi ไม่ขยับนาน → กดนั่งใหม่
-        local dt = os.clock() - lastQiAt
-        if not isBreakingNow and dt > DEFAULTS.RECOVERY_TIMEOUT and (os.clock()-lastRecoverTry)>DEFAULTS.RECOVERY_COOLDOWN then
-          fire("Cultivate"); isMeditating=true; lastRecoverTry=os.clock()
-          pushLog("Recover: pressed Cultivate (Qi not moving)")
-        end
         startMeditate()
       end
 
-      -- Failsafe: นานมากไม่มี break → restart
-      if os.clock() - lastAnyBreakAt > DEFAULTS.FAILSAFE_SECONDS then
-        pushLog("Failsafe: restart bot")
-        setRunning(false, true); task.wait(0.2); setRunning(true, true)
-        lastAnyBreakAt = os.clock()
+      -- Failsafe กันค้าง
+      if os.clock() - lastAnyBreakAt > FAILSAFE_SECONDS then
+        running = false; task.wait(0.25); running = true; lastAnyBreakAt = os.clock()
+        startOrRecoverAt = os.clock()
+        lastAliveAt      = os.clock()
+        sameQiTicks, sameProgTicks, strikes = 0, 0, 0
       end
 
-      updateHUD(pct, original)
+      UI.updateHUD(pct, tostring(pct), qiNowText)
     end
 
-    task.wait(DEFAULTS.CHECK_INTERVAL)
+    task.wait(CHECK_INTERVAL)
   end
 end)
 
--- init
-setRunning(DEFAULTS.START_ON_JOIN, true)
-updateHUD(0,"—")
+-- init HUD
+UI.updateHUD(0, "—", getQiText())
