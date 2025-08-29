@@ -1,22 +1,24 @@
 --[[
-Auto-Detect + Auto Collect Herbs (Roblox Lua)
-- ค้นหา RemoteEvent ที่น่าจะเป็น "Collect" อัตโนมัติ
-- ค้นหาตำแหน่ง UUID ในโมเดลสมุนไพร (Attributes / StringValue / PrimaryPart.Attribute)
-- ทดลองรูปแบบ argument หลายแบบจนกว่าจะสำเร็จ แล้วจำ config ไว้
-- UI โชว์สถานะ, remote/arg format ที่ตรวจพบ, เป้าหมาย/ระยะ/จำนวนเก็บ
-- Hotkey: H = เปิด/ปิด, R = รีเซ็ต/เรียนรู้ใหม่
+Auto-Detect + Auto Collect Herbs (SAFE) — Full Code
+- กัน error PrimaryPart is not a valid member ... (เช็กชนิดก่อนเสมอ)
+- นับเป็น "สมุนไพร" เฉพาะวัตถุที่พบ UUID จริงเท่านั้น
+- ค้นหา RemoteEvent ที่ชื่อส่อ Collect/Pickup/Gather/Harvest อัตโนมัติ
+- ทดลองรูปแบบ FireServer หลายแบบจนสำเร็จ แล้วจำค่าที่ใช้ได้
+- UI สถานะ + draggable + ตัวเลขเก็บแล้ว/เป้าหมาย/ระยะ/remote/arg mode/uuid key
+Keys: H = Toggle, R = Reset learning
 ]]
 
----------------- CONFIG (ปรับเพิ่มคำหลักได้) ----------------
-local HERB_FOLDER_CANDIDATES = {"Herbs", "Spawns", "Drops"}   -- ชื่อโฟลเดอร์ที่มักเก็บสมุนไพร
-local HERB_NAME_KEYWORDS = {"herb","flower","lotus","blossom","plant"} -- คำบ่งชี้ชื่อโมเดล
-local UUID_KEY_CANDIDATES = {"UUID","uuid","Guid","GUID","Id","ID"}   -- ชื่อคีย์ UUID ที่พบได้บ่อย
+---------------- CONFIG ----------------
+local HERB_FOLDER_CANDIDATES = {"Herbs","Spawns","Drops"}
+local UUID_KEY_CANDIDATES    = {"UUID","uuid","Guid","GUID","Id","ID"}
 local REMOTE_NAME_CANDIDATES = {"Collect","Pickup","Gather","Harvest","CollectItem"}
-local COLLECT_RANGE = 12
-local MOVE_TIMEOUT = 6
-local SCAN_INTERVAL = 0.25
-local SEND_COOLDOWN = 0.35
-local SUCCESS_DESPAWN_TIMEOUT = 1.25 -- วินาทีรอดูว่าไอเท็มหายหลังยิง
+local NAME_KEYWORDS          = {"herb","flower","lotus","blossom","plant"} -- ใช้ช่วยเดา แต่จะนับเป็นเป้าหมายก็ต่อเมื่อเจอ UUID เท่านั้น
+
+local COLLECT_RANGE   = 12
+local MOVE_TIMEOUT    = 6
+local SCAN_INTERVAL   = 0.25
+local SEND_COOLDOWN   = 0.35
+local SUCCESS_DESPAWN_TIMEOUT = 1.25
 
 ---------------- Services ----------------
 local Players = game:GetService("Players")
@@ -29,18 +31,19 @@ local character = player.Character or player.CharacterAdded:Wait()
 local humanoid = character:WaitForChild("Humanoid")
 
 ---------------- State ----------------
-local AUTO_ON = false
-local learningMode = true         -- ครั้งแรกให้ลองหา/ทดสอบก่อน
-local lastSend = 0
+local AUTO_ON        = false
+local learningMode   = true
+local lastSend       = 0
 local collectedCount = 0
-local usedUUID = {}               -- กันยิงซ้ำ
+local usedUUID       = {}
+
 local currentTargetName, currentTargetDist, currentTargetUUID = "-", "-", "-"
 
 local detected = {
-    remote = nil,                 -- RemoteEvent ที่หาเจอ
-    remotePath = "",              -- เส้นทางไว้โชว์ใน UI
-    argMode = nil,                -- รูปแบบ argument ที่ผ่าน (1..N)
-    uuidKey = nil,                -- ชื่อคีย์ UUID (เผื่อบางเกมใช้ table แบบ keyed)
+    remote    = nil,
+    remotePath= "",
+    argMode   = nil,  -- 1=uuid, 2={uuid}, 3={key=uuid}, 4={id=uuid}
+    uuidKey   = nil,
 }
 
 ---------------- Utils ----------------
@@ -67,7 +70,6 @@ end
 
 ---------------- Find Remote ----------------
 local function tryFindRemote()
-    -- 1) มาตรฐาน: ReplicatedStorage.Remotes.<ชื่อคาดเดา>
     local RemotesFolder = ReplicatedStorage:FindFirstChild("Remotes")
     if RemotesFolder then
         for _, name in ipairs(REMOTE_NAME_CANDIDATES) do
@@ -76,7 +78,6 @@ local function tryFindRemote()
                 return r, pathOf(r)
             end
         end
-        -- เผื่อชื่ออื่น ๆ
         for _, obj in ipairs(RemotesFolder:GetDescendants()) do
             if obj:IsA("RemoteEvent") then
                 local n = obj.Name:lower()
@@ -88,7 +89,6 @@ local function tryFindRemote()
             end
         end
     end
-    -- 2) เผื่ออยู่นอกโฟลเดอร์ Remotes
     for _, obj in ipairs(ReplicatedStorage:GetDescendants()) do
         if obj:IsA("RemoteEvent") then
             local n = obj.Name:lower()
@@ -102,23 +102,29 @@ local function tryFindRemote()
     return nil, ""
 end
 
----------------- Herb scan + UUID ----------------
+---------------- Herb/UUID helpers ----------------
 local HerbsFolder = workspace
 for _, cand in ipairs(HERB_FOLDER_CANDIDATES) do
     local f = workspace:FindFirstChild(cand)
     if f then HerbsFolder = f break end
 end
 
+local function safeGetAttributes(inst)
+    local ok, attrs = pcall(function() return inst:GetAttributes() end)
+    if ok and typeof(attrs) == "table" then return attrs end
+    return {}
+end
+
 local function hasUUIDStringValue(inst)
     for _, child in ipairs(inst:GetChildren()) do
         if child:IsA("StringValue") then
             for _, key in ipairs(UUID_KEY_CANDIDATES) do
-                if child.Name == key and #child.Value > 10 then
+                if child.Name == key and typeof(child.Value)=="string" and #child.Value > 10 then
                     return child.Value, key
                 end
             end
-            -- เผื่อชื่ออะไรก็ได้แต่เป็น UUID ยาว ๆ
-            if #child.Name <= 6 and #child.Value > 30 and child.Value:find("%-") then
+            -- เดา: ชื่ออะไรก็ได้ แต่ค่าเป็น UUID ลักษณะมี "-" และยาว
+            if typeof(child.Value)=="string" and #child.Value > 30 and child.Value:find("%-") then
                 return child.Value, child.Name
             end
         end
@@ -126,59 +132,73 @@ local function hasUUIDStringValue(inst)
 end
 
 local function getUUIDFromInstance(inst)
-    -- 1) Attributes
-    if inst.GetAttributes then
-        local attrs = inst:GetAttributes()
-        for _, key in ipairs(UUID_KEY_CANDIDATES) do
-            if attrs[key] and typeof(attrs[key])=="string" and #attrs[key] > 10 then
-                return attrs[key], key
-            end
-        end
-        -- เดาว่ามี attribute ที่ยาวและเป็นรูป UUID
-        for k,v in pairs(attrs) do
-            if typeof(v)=="string" and #v > 30 and v:find("%-") then
-                return v, k
-            end
+    -- เฉพาะ Model/BasePart เท่านั้น
+    if not (inst:IsA("Model") or inst:IsA("BasePart")) then return nil, nil end
+
+    -- 1) Attributes บนตัว inst
+    local attrs = safeGetAttributes(inst)
+    for _, key in ipairs(UUID_KEY_CANDIDATES) do
+        local v = attrs[key]
+        if typeof(v)=="string" and #v > 10 then return v, key end
+    end
+    for k,v in pairs(attrs) do
+        if typeof(v)=="string" and #v > 30 and v:find("%-") then
+            return v, k
         end
     end
+
     -- 2) StringValue ลูก
     local sv, key = hasUUIDStringValue(inst)
     if sv then return sv, key end
-    -- 3) PrimaryPart attribute
-    if inst.PrimaryPart and inst.PrimaryPart.GetAttributes then
-        local attrs = inst.PrimaryPart:GetAttributes()
+
+    -- 3) PrimaryPart attribute (เฉพาะกรณีเป็น Model เท่านั้น)
+    if inst:IsA("Model") and inst.PrimaryPart then
+        local ppAttrs = safeGetAttributes(inst.PrimaryPart)
         for _, key2 in ipairs(UUID_KEY_CANDIDATES) do
-            if attrs[key2] and typeof(attrs[key2])=="string" and #attrs[key2] > 10 then
-                return attrs[key2], key2
-            end
+            local v = ppAttrs[key2]
+            if typeof(v)=="string" and #v > 10 then return v, key2 end
         end
-        for k,v in pairs(attrs) do
+        for k,v in pairs(ppAttrs) do
             if typeof(v)=="string" and #v > 30 and v:find("%-") then
                 return v, k
             end
         end
     end
+
     return nil, nil
 end
 
-local function looksLikeHerb(inst)
-    if inst:IsA("Model") or inst:IsA("BasePart") then
-        -- ชื่อบ่งชี้
-        local n = (inst.Name or ""):lower()
-        for _, kw in ipairs(HERB_NAME_KEYWORDS) do
-            if n:find(kw) then return true end
-        end
-        -- มี UUID ก็ถือว่าใช่
-        local u = getUUIDFromInstance(inst)
-        if u then return true end
+local function nameLooksLikeHerb(inst)
+    local n = (inst.Name or ""):lower()
+    for _, kw in ipairs(NAME_KEYWORDS) do
+        if n:find(kw) then return true end
     end
     return false
+end
+
+-- จะถือเป็น "herb candidate" ได้ก็ต่อเมื่อหา UUID เจอเท่านั้น
+local function isHerb(inst)
+    if not (inst:IsA("Model") or inst:IsA("BasePart")) then return false end
+    local uuid = getUUIDFromInstance(inst)
+    if uuid then return true end
+    -- ช่วยลดสแกน: ถ้าชื่อส่อ แต่ไม่มี UUID ก็ไม่เอา
+    return false
+end
+
+local function getCFrame(inst)
+    if inst:IsA("Model") and inst.GetPivot then
+        local ok, cf = pcall(function() return inst:GetPivot() end)
+        if ok and typeof(cf)=="CFrame" then return cf end
+    elseif inst:IsA("BasePart") then
+        return inst.CFrame
+    end
+    return nil
 end
 
 local function collectable(inst)
     local uuid, key = getUUIDFromInstance(inst)
     if not uuid or usedUUID[uuid] then return nil end
-    local cf = (inst.GetPivot and inst:GetPivot()) or (inst:IsA("BasePart") and inst.CFrame)
+    local cf = getCFrame(inst)
     if not cf then return nil end
     return uuid, key, cf.Position
 end
@@ -191,7 +211,13 @@ local function findHerbCandidates()
 
     for _, scope in ipairs(scopes) do
         for _, d in ipairs(scope:GetDescendants()) do
-            if looksLikeHerb(d) then table.insert(out, d) end
+            -- ลด false positive: ต้องเป็น Model/BasePart และอย่างน้อยชื่อส่อ หรือมี UUID
+            if (d:IsA("Model") or d:IsA("BasePart")) then
+                if getUUIDFromInstance(d) or nameLooksLikeHerb(d) then
+                    -- แต่จะเก็บจริงเฉพาะที่มี UUID (เช็กอีกชั้นใน collectable)
+                    table.insert(out, d)
+                end
+            end
         end
     end
     return out
@@ -211,18 +237,13 @@ local function nearestHerb()
     return best, bestUUID, bestKey, bestPos, bestD
 end
 
----------------- Try FireServer formats ----------------
--- ลำดับการลองส่ง (จะจำแบบที่สำเร็จ)
--- mode 1: FireServer(uuid)                 -- string ตรง ๆ
--- mode 2: FireServer({uuid})               -- table single
--- mode 3: FireServer({UUID=uuid})          -- keyed table (uuidKey จากที่ตรวจพบ)
--- mode 4: FireServer({id=uuid})            -- เผื่อ server ใช้ "id"
+---------------- Send formats ----------------
 local function trySend(remote, uuid, uuidKey)
     local now = time()
     if (now - lastSend) < SEND_COOLDOWN then return false, "cooldown" end
     lastSend = now
 
-    local ok, err
+    local ok
     if not detected.argMode or detected.argMode == 1 then
         ok = pcall(function() remote:FireServer(uuid) end)
         if ok then return true, 1 end
@@ -234,9 +255,7 @@ local function trySend(remote, uuid, uuidKey)
     if not detected.argMode or detected.argMode == 3 then
         local key = detected.uuidKey or uuidKey or "UUID"
         ok = pcall(function() remote:FireServer({[key]=uuid}) end)
-        if ok then
-            return true, 3, key
-        end
+        if ok then return true, 3, key end
     end
     if not detected.argMode or detected.argMode == 4 then
         ok = pcall(function() remote:FireServer({id=uuid}) end)
@@ -246,7 +265,6 @@ local function trySend(remote, uuid, uuidKey)
 end
 
 local function waitDespawn(inst)
-    -- รอดูว่าหายไป (หรือ Parent กลายเป็น nil) ภายในเวลาหนึ่ง
     local t0 = time()
     while time() - t0 < SUCCESS_DESPAWN_TIMEOUT do
         if not inst.Parent then return true end
@@ -260,7 +278,6 @@ local function sendAndConfirm(inst, uuid, uuidKey)
     local ok, mode, maybeKey = trySend(detected.remote, uuid, uuidKey)
     if not ok then return false, mode end
 
-    -- ถ้าหลังยิงแล้วไอเท็มหาย/ถูกทำลาย → ถือว่าสำเร็จ
     if waitDespawn(inst) then
         if not detected.argMode then
             detected.argMode = mode
@@ -270,8 +287,6 @@ local function sendAndConfirm(inst, uuid, uuidKey)
         collectedCount += 1
         return true, "despawned"
     end
-
-    -- ถ้าไม่หาย อาจเป็นเพราะอยู่ไกล/เงื่อนไขอื่น ลองถือว่าไม่สำเร็จ
     return false, "no_despawn"
 end
 
@@ -301,22 +316,19 @@ screenGui.ResetOnSpawn = false
 screenGui.Parent = player:WaitForChild("PlayerGui")
 
 local frame = Instance.new("Frame")
-frame.Size = UDim2.fromOffset(310, 190)
+frame.Size = UDim2.fromOffset(320, 200)
 frame.Position = UDim2.fromOffset(60, 120)
-frame.BackgroundColor3 = Color3.fromRGB(22, 22, 26)
+frame.BackgroundColor3 = Color3.fromRGB(22,22,26)
 frame.BorderSizePixel = 0
 frame.Parent = screenGui
 Instance.new("UICorner", frame).CornerRadius = UDim.new(0,14)
 local stroke = Instance.new("UIStroke", frame)
 stroke.Color = Color3.fromRGB(70,70,80); stroke.Thickness = 1
-
 local padding = Instance.new("UIPadding", frame)
-padding.PaddingLeft = UDim.new(0,12)
-padding.PaddingRight = UDim.new(0,12)
-padding.PaddingTop = UDim.new(0,10)
+padding.PaddingLeft = UDim.new(0,12); padding.PaddingRight = UDim.new(0,12); padding.PaddingTop = UDim.new(0,10)
 
 local title = Instance.new("TextLabel")
-title.Size = UDim2.new(1, -24, 0, 22)
+title.Size = UDim2.new(1,-24,0,22)
 title.BackgroundTransparency = 1
 title.Font = Enum.Font.GothamBold
 title.TextSize = 16
@@ -327,7 +339,7 @@ title.Parent = frame
 
 local toggleBtn = Instance.new("TextButton")
 toggleBtn.Size = UDim2.fromOffset(80,28)
-toggleBtn.Position = UDim2.new(1, -92, 0, 4)
+toggleBtn.Position = UDim2.new(1,-92,0,4)
 toggleBtn.BackgroundColor3 = Color3.fromRGB(120,40,40)
 toggleBtn.TextColor3 = Color3.new(1,1,1)
 toggleBtn.Font = Enum.Font.GothamSemibold
@@ -337,20 +349,20 @@ toggleBtn.Parent = frame
 Instance.new("UICorner", toggleBtn).CornerRadius = UDim.new(0,10)
 
 local line = Instance.new("Frame", frame)
-line.Size = UDim2.new(1, -8, 0, 1)
-line.Position = UDim2.fromOffset(4, 36)
+line.Size = UDim2.new(1,-8,0,1)
+line.Position = UDim2.fromOffset(4,36)
 line.BackgroundColor3 = Color3.fromRGB(60,60,70)
 line.BorderSizePixel = 0
 
 local list = Instance.new("Frame", frame)
-list.Size = UDim2.new(1, -4, 1, -44)
-list.Position = UDim2.fromOffset(2, 40)
+list.Size = UDim2.new(1,-4,1,-44)
+list.Position = UDim2.fromOffset(2,40)
 list.BackgroundTransparency = 1
 
 local function mkRow(y, text)
     local r = Instance.new("TextLabel")
-    r.Size = UDim2.new(1, -4, 0, 22)
-    r.Position = UDim2.fromOffset(2, y)
+    r.Size = UDim2.new(1,-4,0,22)
+    r.Position = UDim2.fromOffset(2,y)
     r.BackgroundTransparency = 1
     r.TextXAlignment = Enum.TextXAlignment.Left
     r.Font = Enum.Font.Gotham
@@ -386,7 +398,10 @@ UIS.InputChanged:Connect(function(i)
     end
 end)
 
-local function shortUUID(u) if not u or #u<8 then return tostring(u or "-") end return u:sub(1,8).."... end" end
+local function shortUUID(u)
+    if not u or #u < 8 then return tostring(u or "-") end
+    return (u:sub(1,8) .. "...")
+end
 
 local function updateUI()
     statusLbl.Text = ("สถานะ: %s (H=Toggle, R=Reset)"):format(AUTO_ON and (learningMode and "LEARN+ON" or "ON") or "OFF")
@@ -425,7 +440,7 @@ UIS.InputBegan:Connect(function(input, gp)
     end
 end)
 
----------------- Boot: หา Remote หนึ่งครั้ง ----------------
+---------------- Boot: หา Remote ----------------
 task.defer(function()
     local r, p = tryFindRemote()
     detected.remote, detected.remotePath = r, p
@@ -441,7 +456,6 @@ task.defer(function()
                 humanoid = character:WaitForChild("Humanoid")
             end
 
-            -- ถ้ายังไม่มี remote ให้รอ
             if not detected.remote then
                 task.wait(SCAN_INTERVAL)
             else
@@ -461,14 +475,13 @@ task.defer(function()
                         end
                     end
 
-                    -- ยิง + ยืนยันความสำเร็จด้วยการ despawn
+                    -- ยิง + ยืนยันด้วยการ despawn
                     local ok, reason = sendAndConfirm(inst, uuid, uuidKey)
                     if ok then
-                        learningMode = detected.argMode == nil  -- ถ้าเพิ่งค้นพบ argMode จะถูกตั้งค่าแล้ว
+                        if detected.argMode then learningMode = false end
                         updateUI()
                         task.wait(0.2)
                     else
-                        -- ถ้ายิงไม่สำเร็จในโหมดเรียนรู้ ให้ลองรูปแบบถัดไปในรอบหน้า (trySend จะจัดการเอง)
                         task.wait(SCAN_INTERVAL)
                     end
                 else
@@ -483,4 +496,4 @@ task.defer(function()
     end
 end)
 
-print("[AUTO HERB] H=Toggle, R=Reset — เริ่มโหมดเรียนรู้อัตโนมัติ")
+print("[AUTO HERB] H=Toggle, R=Reset — เริ่มโหมดเรียนรู้อัตโนมัติ (โค้ดเวอร์ชัน SAFE)")
