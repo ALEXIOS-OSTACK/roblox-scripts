@@ -1,4 +1,4 @@
--- ⚔ Auto Farm NPC ทั้ง 4 ตัว + UI สวยๆ + ลากได้
+
 
 -- ตั้งค่าตัวแปร
 local farming = false
@@ -126,4 +126,4 @@ StopButton.MouseButton1Click:Connect(function()
     farming = false
     Status.Text = "⏸ หยุดแล้ว"
 end)
-a
+
