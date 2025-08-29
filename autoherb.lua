@@ -1,24 +1,29 @@
 --[[
-Auto-Detect + Auto Collect Herbs (SAFE) — Full Code
-- กัน error PrimaryPart is not a valid member ... (เช็กชนิดก่อนเสมอ)
-- นับเป็น "สมุนไพร" เฉพาะวัตถุที่พบ UUID จริงเท่านั้น
-- ค้นหา RemoteEvent ที่ชื่อส่อ Collect/Pickup/Gather/Harvest อัตโนมัติ
-- ทดลองรูปแบบ FireServer หลายแบบจนสำเร็จ แล้วจำค่าที่ใช้ได้
-- UI สถานะ + draggable + ตัวเลขเก็บแล้ว/เป้าหมาย/ระยะ/remote/arg mode/uuid key
-Keys: H = Toggle, R = Reset learning
+Auto Herb (Confirmed Arg) — Immortal Luck
+- ใช้ Remote: ReplicatedStorage.Remotes.Collect
+- ส่งอาร์กิวเมนต์เดียว "{"..UUID.."}" (string ครอบด้วยวงเล็บปีกกา)
+- หา UUID จาก Attributes / StringValue / PrimaryPart.Attributes (เฉพาะ Model)
+- กัน error PrimaryPart บน Part/SpawnLocation ด้วยการเช็กชนิด + pcall
+- รองรับ ProximityPrompt: ถ้าเจอจะกดให้ก่อน
+- UI แสดงสถานะ/เป้าหมาย/ระยะ/จำนวนเก็บ ลากได้
+Keys: H=Toggle, R=Reset counter
 ]]
 
----------------- CONFIG ----------------
-local HERB_FOLDER_CANDIDATES = {"Herbs","Spawns","Drops"}
-local UUID_KEY_CANDIDATES    = {"UUID","uuid","Guid","GUID","Id","ID"}
-local REMOTE_NAME_CANDIDATES = {"Collect","Pickup","Gather","Harvest","CollectItem"}
-local NAME_KEYWORDS          = {"herb","flower","lotus","blossom","plant"} -- ใช้ช่วยเดา แต่จะนับเป็นเป้าหมายก็ต่อเมื่อเจอ UUID เท่านั้น
 
-local COLLECT_RANGE   = 12
+---------------- CONFIG ----------------
+local HERB_FOLDER_CANDIDATES = {"Herbs","Spawns","Drops"} -- ถ้าเกมไม่มี โค้ดจะสแกนทั้ง workspace
+local UUID_KEYS              = {"UUID","uuid","Guid","GUID","Id","ID"} -- ชื่อคีย์ยอดฮิต
+local NAME_HINTS             = {"herb","flower","lotus","blossom","plant"} -- แค่ช่วยคัดกรองเบื้องต้น
+
+local COLLECT_RANGE   = 18    -- ระยะที่ถือว่าใกล้พอ
 local MOVE_TIMEOUT    = 6
 local SCAN_INTERVAL   = 0.25
-local SEND_COOLDOWN   = 0.35
-local SUCCESS_DESPAWN_TIMEOUT = 1.25
+local SEND_COOLDOWN   = 0.25
+local SUCCESS_WAIT    = 1.2   -- เวลารอดูว่า item หาย (บางเกมไม่ลบ ก็จะถือว่าสำเร็จด้วย cooldown flag)
+
+-- ตัดคลาสที่ไม่ใช่เป้าหมาย
+local CLASS_BLACKLIST = { "SpawnLocation", "Camera", "Terrain", "Tool", "Accessory", "Hat" }
+
 
 ---------------- Services ----------------
 local Players = game:GetService("Players")
@@ -30,23 +35,27 @@ local player = Players.LocalPlayer
 local character = player.Character or player.CharacterAdded:Wait()
 local humanoid = character:WaitForChild("Humanoid")
 
+-- Remote ตามสปาย
+local CollectRemote = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("Collect")
+
+
 ---------------- State ----------------
-local AUTO_ON        = false
-local learningMode   = true
-local lastSend       = 0
-local collectedCount = 0
-local usedUUID       = {}
+local AUTO_ON = false
+local lastSend = 0
+local collected = 0
+local usedUUID = {}
 
-local currentTargetName, currentTargetDist, currentTargetUUID = "-", "-", "-"
+local currentName, currentDist, currentUUID = "-", "-", "-"
 
-local detected = {
-    remote    = nil,
-    remotePath= "",
-    argMode   = nil,  -- 1=uuid, 2={uuid}, 3={key=uuid}, 4={id=uuid}
-    uuidKey   = nil,
-}
 
----------------- Utils ----------------
+---------------- Helpers ----------------
+local function isBlacklisted(inst)
+    for _, c in ipairs(CLASS_BLACKLIST) do
+        if inst:IsA(c) then return true end
+    end
+    return false
+end
+
 local function getRoot(c)
     c = c or player.Character
     if not c then return nil end
@@ -59,91 +68,47 @@ local function distanceTo(pos)
     return (root.Position - pos).Magnitude
 end
 
-local function pathOf(inst)
-    local t = {}
-    while inst and inst ~= game do
-        table.insert(t, 1, inst.Name)
-        inst = inst.Parent
-    end
-    return table.concat(t, "/")
-end
-
----------------- Find Remote ----------------
-local function tryFindRemote()
-    local RemotesFolder = ReplicatedStorage:FindFirstChild("Remotes")
-    if RemotesFolder then
-        for _, name in ipairs(REMOTE_NAME_CANDIDATES) do
-            local r = RemotesFolder:FindFirstChild(name)
-            if r and r:IsA("RemoteEvent") then
-                return r, pathOf(r)
-            end
-        end
-        for _, obj in ipairs(RemotesFolder:GetDescendants()) do
-            if obj:IsA("RemoteEvent") then
-                local n = obj.Name:lower()
-                for _, kw in ipairs({"collect","pickup","gather","harvest"}) do
-                    if n:find(kw) then
-                        return obj, pathOf(obj)
-                    end
-                end
-            end
-        end
-    end
-    for _, obj in ipairs(ReplicatedStorage:GetDescendants()) do
-        if obj:IsA("RemoteEvent") then
-            local n = obj.Name:lower()
-            for _, kw in ipairs({"collect","pickup","gather","harvest"}) do
-                if n:find(kw) then
-                    return obj, pathOf(obj)
-                end
-            end
-        end
-    end
-    return nil, ""
-end
-
----------------- Herb/UUID helpers ----------------
-local HerbsFolder = workspace
-for _, cand in ipairs(HERB_FOLDER_CANDIDATES) do
-    local f = workspace:FindFirstChild(cand)
-    if f then HerbsFolder = f break end
-end
-
 local function safeGetAttributes(inst)
     local ok, attrs = pcall(function() return inst:GetAttributes() end)
-    if ok and typeof(attrs) == "table" then return attrs end
+    if ok and typeof(attrs)=="table" then return attrs end
     return {}
 end
 
+local function getPrimaryPart(inst)
+    if not inst:IsA("Model") then return nil end
+    local ok, pp = pcall(function() return inst.PrimaryPart end)
+    if ok then return pp end
+    return nil
+end
+
 local function hasUUIDStringValue(inst)
-    for _, child in ipairs(inst:GetChildren()) do
-        if child:IsA("StringValue") then
-            for _, key in ipairs(UUID_KEY_CANDIDATES) do
-                if child.Name == key and typeof(child.Value)=="string" and #child.Value > 10 then
-                    return child.Value, key
+    for _, ch in ipairs(inst:GetChildren()) do
+        if ch:IsA("StringValue") then
+            for _, k in ipairs(UUID_KEYS) do
+                if ch.Name == k and typeof(ch.Value)=="string" and #ch.Value>10 then
+                    return ch.Value, k
                 end
             end
-            -- เดา: ชื่ออะไรก็ได้ แต่ค่าเป็น UUID ลักษณะมี "-" และยาว
-            if typeof(child.Value)=="string" and #child.Value > 30 and child.Value:find("%-") then
-                return child.Value, child.Name
+            if typeof(ch.Value)=="string" and #ch.Value>30 and ch.Value:find("%-") then
+                return ch.Value, ch.Name
             end
         end
     end
 end
 
-local function getUUIDFromInstance(inst)
-    -- เฉพาะ Model/BasePart เท่านั้น
-    if not (inst:IsA("Model") or inst:IsA("BasePart")) then return nil, nil end
+local function getUUID(inst)
+    if isBlacklisted(inst) then return nil,nil end
+    if not (inst:IsA("Model") or inst:IsA("BasePart")) then return nil,nil end
 
     -- 1) Attributes บนตัว inst
     local attrs = safeGetAttributes(inst)
-    for _, key in ipairs(UUID_KEY_CANDIDATES) do
-        local v = attrs[key]
-        if typeof(v)=="string" and #v > 10 then return v, key end
+    for _, k in ipairs(UUID_KEYS) do
+        local v = attrs[k]
+        if typeof(v)=="string" and #v>10 then return v,k end
     end
     for k,v in pairs(attrs) do
-        if typeof(v)=="string" and #v > 30 and v:find("%-") then
-            return v, k
+        if typeof(v)=="string" and #v>30 and v:find("%-") then
+            return v,k
         end
     end
 
@@ -151,41 +116,25 @@ local function getUUIDFromInstance(inst)
     local sv, key = hasUUIDStringValue(inst)
     if sv then return sv, key end
 
-    -- 3) PrimaryPart attribute (เฉพาะกรณีเป็น Model เท่านั้น)
-    if inst:IsA("Model") and inst.PrimaryPart then
-        local ppAttrs = safeGetAttributes(inst.PrimaryPart)
-        for _, key2 in ipairs(UUID_KEY_CANDIDATES) do
-            local v = ppAttrs[key2]
-            if typeof(v)=="string" and #v > 10 then return v, key2 end
+    -- 3) PrimaryPart.Attributes (เฉพาะ Model)
+    local pp = getPrimaryPart(inst)
+    if pp then
+        local ppAttrs = safeGetAttributes(pp)
+        for _, k2 in ipairs(UUID_KEYS) do
+            local v = ppAttrs[k2]
+            if typeof(v)=="string" and #v>10 then return v,k2 end
         end
-        for k,v in pairs(ppAttrs) do
-            if typeof(v)=="string" and #v > 30 and v:find("%-") then
-                return v, k
+        for k2,v2 in pairs(ppAttrs) do
+            if typeof(v2)=="string" and #v2>30 and v2:find("%-") then
+                return v2,k2
             end
         end
     end
 
-    return nil, nil
+    return nil,nil
 end
 
-local function nameLooksLikeHerb(inst)
-    local n = (inst.Name or ""):lower()
-    for _, kw in ipairs(NAME_KEYWORDS) do
-        if n:find(kw) then return true end
-    end
-    return false
-end
-
--- จะถือเป็น "herb candidate" ได้ก็ต่อเมื่อหา UUID เจอเท่านั้น
-local function isHerb(inst)
-    if not (inst:IsA("Model") or inst:IsA("BasePart")) then return false end
-    local uuid = getUUIDFromInstance(inst)
-    if uuid then return true end
-    -- ช่วยลดสแกน: ถ้าชื่อส่อ แต่ไม่มี UUID ก็ไม่เอา
-    return false
-end
-
-local function getCFrame(inst)
+local function getCF(inst)
     if inst:IsA("Model") and inst.GetPivot then
         local ok, cf = pcall(function() return inst:GetPivot() end)
         if ok and typeof(cf)=="CFrame" then return cf end
@@ -195,26 +144,29 @@ local function getCFrame(inst)
     return nil
 end
 
-local function collectable(inst)
-    local uuid, key = getUUIDFromInstance(inst)
-    if not uuid or usedUUID[uuid] then return nil end
-    local cf = getCFrame(inst)
-    if not cf then return nil end
-    return uuid, key, cf.Position
+local function nameHint(inst)
+    local n = (inst.Name or ""):lower()
+    for _, w in ipairs(NAME_HINTS) do
+        if n:find(w) then return true end
+    end
+    return false
 end
 
-local function findHerbCandidates()
-    local out = {}
-    local scopes = {}
+-- โฟลเดอร์หลัก (ถ้ามี)
+local HerbsFolder = workspace
+for _, cand in ipairs(HERB_FOLDER_CANDIDATES) do
+    local f = workspace:FindFirstChild(cand)
+    if f then HerbsFolder = f break end
+end
+
+local function findCandidates()
+    local out, scopes = {}, {}
     if HerbsFolder ~= workspace then table.insert(scopes, HerbsFolder) end
     table.insert(scopes, workspace)
-
     for _, scope in ipairs(scopes) do
         for _, d in ipairs(scope:GetDescendants()) do
-            -- ลด false positive: ต้องเป็น Model/BasePart และอย่างน้อยชื่อส่อ หรือมี UUID
-            if (d:IsA("Model") or d:IsA("BasePart")) then
-                if getUUIDFromInstance(d) or nameLooksLikeHerb(d) then
-                    -- แต่จะเก็บจริงเฉพาะที่มี UUID (เช็กอีกชั้นใน collectable)
+            if (d:IsA("Model") or d:IsA("BasePart")) and not isBlacklisted(d) then
+                if getUUID(d) or nameHint(d) then
                     table.insert(out, d)
                 end
             end
@@ -223,84 +175,92 @@ local function findHerbCandidates()
     return out
 end
 
+local function collectable(inst)
+    local uuid, key = getUUID(inst)
+    if not uuid or usedUUID[uuid] then return nil end
+    local cf = getCF(inst)
+    if not cf then return nil end
+    return uuid, key, cf.Position
+end
+
 local function nearestHerb()
-    local best, bestD, bestUUID, bestKey, bestPos = nil, math.huge, nil, nil, nil
-    for _, inst in ipairs(findHerbCandidates()) do
+    local best, bestD, bestUUID, bestPos, bestKey
+    for _, inst in ipairs(findCandidates()) do
         local uuid, key, pos = collectable(inst)
         if uuid and pos then
             local d = distanceTo(pos)
-            if d < bestD then
-                best, bestD, bestUUID, bestKey, bestPos = inst, d, uuid, key, pos
+            if not best or d < bestD then
+                best, bestD, bestUUID, bestPos, bestKey = inst, d, uuid, pos, key
             end
         end
     end
     return best, bestUUID, bestKey, bestPos, bestD
 end
 
----------------- Send formats ----------------
-local function trySend(remote, uuid, uuidKey)
-    local now = time()
-    if (now - lastSend) < SEND_COOLDOWN then return false, "cooldown" end
-    lastSend = now
-
-    local ok
-    if not detected.argMode or detected.argMode == 1 then
-        ok = pcall(function() remote:FireServer(uuid) end)
-        if ok then return true, 1 end
-    end
-    if not detected.argMode or detected.argMode == 2 then
-        ok = pcall(function() remote:FireServer({uuid}) end)
-        if ok then return true, 2 end
-    end
-    if not detected.argMode or detected.argMode == 3 then
-        local key = detected.uuidKey or uuidKey or "UUID"
-        ok = pcall(function() remote:FireServer({[key]=uuid}) end)
-        if ok then return true, 3, key end
-    end
-    if not detected.argMode or detected.argMode == 4 then
-        ok = pcall(function() remote:FireServer({id=uuid}) end)
-        if ok then return true, 4 end
-    end
-    return false, "pcall_failed"
-end
-
-local function waitDespawn(inst)
-    local t0 = time()
-    while time() - t0 < SUCCESS_DESPAWN_TIMEOUT do
-        if not inst.Parent then return true end
-        RunService.Heartbeat:Wait()
+-- ProximityPrompt helper (บางเกมวาง prompt ไว้กับต้นไม้)
+local function activatePrompt(prompt)
+    if typeof(prompt)=="Instance" and prompt:IsA("ProximityPrompt") then
+        prompt:InputHoldBegin()
+        task.delay((prompt.HoldDuration or 0)+0.05, function()
+            prompt:InputHoldEnd()
+        end)
+        return true
     end
     return false
 end
 
-local function sendAndConfirm(inst, uuid, uuidKey)
-    if not detected.remote then return false, "no_remote" end
-    local ok, mode, maybeKey = trySend(detected.remote, uuid, uuidKey)
-    if not ok then return false, mode end
-
-    if waitDespawn(inst) then
-        if not detected.argMode then
-            detected.argMode = mode
-            if mode == 3 and maybeKey then detected.uuidKey = maybeKey end
+local function tryPrompt(inst)
+    for _, d in ipairs(inst:GetDescendants()) do
+        if d:IsA("ProximityPrompt") then
+            return activatePrompt(d)
         end
-        usedUUID[uuid] = true
-        collectedCount += 1
-        return true, "despawned"
     end
-    return false, "no_despawn"
+    if inst:IsA("BasePart") then
+        local p = inst:FindFirstChildOfClass("ProximityPrompt")
+        if p then return activatePrompt(p) end
+    end
+    return false
 end
 
----------------- Movement ----------------
-local function safeMoveTo(targetPos, timeout)
+-- wrap เป็น "{UUID}" ตามสปาย
+local function wrapBraces(u)
+    if not u then return nil end
+    if not u:match("^%b{}$") then return "{"..u.."}" end
+    return u
+end
+
+local function sendCollect(uuid)
+    local now = time()
+    if now - lastSend < SEND_COOLDOWN then return false end
+    lastSend = now
+    local arg = wrapBraces(uuid)
+    if not arg then return false end
+    local ok = pcall(function() CollectRemote:FireServer(arg) end)
+    return ok
+end
+
+local function waitSuccess(inst, uuid)
+    -- 1) รอ despawn
+    local t0 = time()
+    while time() - t0 < SUCCESS_WAIT do
+        if not inst.Parent then return true end
+        RunService.Heartbeat:Wait()
+    end
+    -- 2) บางเกมไม่ลบโมเดล: mark ว่าเก็บแล้ว กันยิงซ้ำช่วงหนึ่ง
+    usedUUID[uuid] = true
+    return true
+end
+
+local function safeMoveTo(pos, timeout)
     local root = getRoot()
     if not root or not humanoid or humanoid.Health <= 0 then return false end
-    humanoid:MoveTo(targetPos)
+    humanoid:MoveTo(pos)
     local start, reached = time(), false
     local conn = humanoid.MoveToFinished:Connect(function(ok) reached = ok end)
     while time() - start < (timeout or MOVE_TIMEOUT) do
         RunService.Heartbeat:Wait()
         if reached then break end
-        if (root.Position - targetPos).Magnitude <= COLLECT_RANGE then
+        if (root.Position - pos).Magnitude <= COLLECT_RANGE then
             reached = true
             break
         end
@@ -309,14 +269,15 @@ local function safeMoveTo(targetPos, timeout)
     return reached
 end
 
+
 ---------------- UI ----------------
 local screenGui = Instance.new("ScreenGui")
-screenGui.Name = "AutoHerbDetectUI"
+screenGui.Name = "AutoHerbUI"
 screenGui.ResetOnSpawn = false
 screenGui.Parent = player:WaitForChild("PlayerGui")
 
 local frame = Instance.new("Frame")
-frame.Size = UDim2.fromOffset(320, 200)
+frame.Size = UDim2.fromOffset(320, 190)
 frame.Position = UDim2.fromOffset(60, 120)
 frame.BackgroundColor3 = Color3.fromRGB(22,22,26)
 frame.BorderSizePixel = 0
@@ -324,8 +285,8 @@ frame.Parent = screenGui
 Instance.new("UICorner", frame).CornerRadius = UDim.new(0,14)
 local stroke = Instance.new("UIStroke", frame)
 stroke.Color = Color3.fromRGB(70,70,80); stroke.Thickness = 1
-local padding = Instance.new("UIPadding", frame)
-padding.PaddingLeft = UDim.new(0,12); padding.PaddingRight = UDim.new(0,12); padding.PaddingTop = UDim.new(0,10)
+local pad = Instance.new("UIPadding", frame)
+pad.PaddingLeft = UDim.new(0,12); pad.PaddingRight = UDim.new(0,12); pad.PaddingTop = UDim.new(0,10)
 
 local title = Instance.new("TextLabel")
 title.Size = UDim2.new(1,-24,0,22)
@@ -334,7 +295,7 @@ title.Font = Enum.Font.GothamBold
 title.TextSize = 16
 title.TextXAlignment = Enum.TextXAlignment.Left
 title.TextColor3 = Color3.fromRGB(235,235,240)
-title.Text = "🌿 Auto Herb (Detect)"
+title.Text = "🌿 Auto Herb (Collect \"{UUID}\")"
 title.Parent = frame
 
 local toggleBtn = Instance.new("TextButton")
@@ -359,27 +320,25 @@ list.Size = UDim2.new(1,-4,1,-44)
 list.Position = UDim2.fromOffset(2,40)
 list.BackgroundTransparency = 1
 
-local function mkRow(y, text)
-    local r = Instance.new("TextLabel")
-    r.Size = UDim2.new(1,-4,0,22)
-    r.Position = UDim2.fromOffset(2,y)
-    r.BackgroundTransparency = 1
-    r.TextXAlignment = Enum.TextXAlignment.Left
-    r.Font = Enum.Font.Gotham
-    r.TextSize = 14
-    r.TextColor3 = Color3.fromRGB(210,210,220)
-    r.Text = text
-    r.Parent = list
-    return r
+local function mk(y, t)
+    local l = Instance.new("TextLabel")
+    l.Size = UDim2.new(1,-4,0,22)
+    l.Position = UDim2.fromOffset(2,y)
+    l.BackgroundTransparency = 1
+    l.Font = Enum.Font.Gotham
+    l.TextSize = 14
+    l.TextXAlignment = Enum.TextXAlignment.Left
+    l.TextColor3 = Color3.fromRGB(210,210,220)
+    l.Text = t
+    l.Parent = list
+    return l
 end
 
-local statusLbl  = mkRow(0,  "สถานะ: OFF (H=Toggle, R=Reset)")
-local remoteLbl  = mkRow(24, "Remote: -")
-local argLbl     = mkRow(48, "Arg Mode: -")
-local uuidLbl    = mkRow(72, "UUID Key: -")
-local targetLbl  = mkRow(96, "เป้าหมาย: -")
-local distLbl    = mkRow(120,"ระยะ: -")
-local countLbl   = mkRow(144,"เก็บแล้ว: 0")
+local statusLbl = mk(0,  "สถานะ: OFF (H=Toggle, R=Reset)")
+local remoteLbl = mk(24, "Remote: ReplicatedStorage/Remotes/Collect")
+local targetLbl = mk(48, "เป้าหมาย: -")
+local distLbl   = mk(72, "ระยะ: -")
+local countLbl  = mk(96, "เก็บแล้ว: 0")
 
 -- ลากได้
 local dragging, dragStart, startPos = false, nil, nil
@@ -398,33 +357,17 @@ UIS.InputChanged:Connect(function(i)
     end
 end)
 
-local function shortUUID(u)
-    if not u or #u < 8 then return tostring(u or "-") end
-    return (u:sub(1,8) .. "...")
-end
+local function shortUUID(u) if not u or #u<8 then return tostring(u or "-") end return u:sub(1,8).."... end" end
 
 local function updateUI()
-    statusLbl.Text = ("สถานะ: %s (H=Toggle, R=Reset)"):format(AUTO_ON and (learningMode and "LEARN+ON" or "ON") or "OFF")
-    remoteLbl.Text = ("Remote: %s"):format(detected.remote and detected.remotePath or "-")
-    argLbl.Text    = ("Arg Mode: %s"):format(detected.argMode and tostring(detected.argMode) or "-")
-    uuidLbl.Text   = ("UUID Key: %s"):format(detected.uuidKey or "-")
-    targetLbl.Text = ("เป้าหมาย: %s (%s)"):format(currentTargetName or "-", shortUUID(currentTargetUUID or "-"))
-    distLbl.Text   = ("ระยะ: %s"):format(currentTargetDist or "-")
-    countLbl.Text  = ("เก็บแล้ว: %d"):format(collectedCount)
-
+    statusLbl.Text = ("สถานะ: %s (H=Toggle, R=Reset)"):format(AUTO_ON and "ON" or "OFF")
+    targetLbl.Text = ("เป้าหมาย: %s (%s)"):format(currentName or "-", shortUUID(currentUUID or "-"))
+    distLbl.Text   = ("ระยะ: %s"):format(currentDist or "-")
+    countLbl.Text  = ("เก็บแล้ว: %d"):format(collected)
     toggleBtn.Text = AUTO_ON and "ON" or "OFF"
     toggleBtn.BackgroundColor3 = AUTO_ON and Color3.fromRGB(40,160,80) or Color3.fromRGB(120,40,40)
 end
 updateUI()
-
-local function resetLearning()
-    learningMode = true
-    detected.argMode = nil
-    detected.uuidKey = nil
-    usedUUID = {}
-    updateUI()
-    print("[AUTO HERB] reset learning")
-end
 
 toggleBtn.MouseButton1Click:Connect(function()
     AUTO_ON = not AUTO_ON
@@ -436,16 +379,12 @@ UIS.InputBegan:Connect(function(input, gp)
         AUTO_ON = not AUTO_ON
         updateUI()
     elseif input.KeyCode == Enum.KeyCode.R then
-        resetLearning()
+        collected = 0
+        usedUUID = {}
+        updateUI()
     end
 end)
 
----------------- Boot: หา Remote ----------------
-task.defer(function()
-    local r, p = tryFindRemote()
-    detected.remote, detected.remotePath = r, p
-    updateUI()
-end)
 
 ---------------- Main Loop ----------------
 task.defer(function()
@@ -456,39 +395,44 @@ task.defer(function()
                 humanoid = character:WaitForChild("Humanoid")
             end
 
-            if not detected.remote then
-                task.wait(SCAN_INTERVAL)
-            else
-                local inst, uuid, uuidKey, pos, dist = nearestHerb()
-                if inst and uuid and pos then
-                    currentTargetName = inst.Name
-                    currentTargetUUID = uuid
-                    currentTargetDist = string.format("%.1f", dist)
-                    updateUI()
+            local inst, uuid, _key, pos, dist = nearestHerb()
+            if inst and uuid and pos then
+                currentName, currentUUID = inst.Name, uuid
+                currentDist = string.format("%.1f", dist)
+                updateUI()
 
-                    if dist > COLLECT_RANGE then
-                        safeMoveTo(pos, MOVE_TIMEOUT)
-                        local root = getRoot()
-                        if root then
-                            currentTargetDist = string.format("%.1f", (root.Position - pos).Magnitude)
-                            updateUI()
-                        end
+                if dist > COLLECT_RANGE then
+                    safeMoveTo(pos, MOVE_TIMEOUT)
+                    local root = getRoot()
+                    if root then
+                        currentDist = string.format("%.1f", (root.Position - pos).Magnitude)
+                        updateUI()
                     end
+                end
 
-                    -- ยิง + ยืนยันด้วยการ despawn
-                    local ok, reason = sendAndConfirm(inst, uuid, uuidKey)
-                    if ok then
-                        if detected.argMode then learningMode = false end
+                -- ลองกด ProximityPrompt ก่อน (ถ้ามี)
+                if tryPrompt(inst) then
+                    if waitSuccess(inst, uuid) then
+                        collected += 1
                         updateUI()
                         task.wait(0.2)
+                    end
+                else
+                    -- ยิง Collect("{UUID}")
+                    if sendCollect(uuid) then
+                        if waitSuccess(inst, uuid) then
+                            collected += 1
+                            updateUI()
+                            task.wait(0.2)
+                        end
                     else
                         task.wait(SCAN_INTERVAL)
                     end
-                else
-                    currentTargetName, currentTargetUUID, currentTargetDist = "-", "-", "-"
-                    updateUI()
-                    task.wait(SCAN_INTERVAL)
                 end
+            else
+                currentName, currentUUID, currentDist = "-", "-", "-"
+                updateUI()
+                task.wait(SCAN_INTERVAL)
             end
         else
             task.wait(0.25)
@@ -496,4 +440,4 @@ task.defer(function()
     end
 end)
 
-print("[AUTO HERB] H=Toggle, R=Reset — เริ่มโหมดเรียนรู้อัตโนมัติ (โค้ดเวอร์ชัน SAFE)")
+print("[AUTO HERB] Ready — Collect Remote with \"{UUID}\" | H=Toggle, R=Reset")
