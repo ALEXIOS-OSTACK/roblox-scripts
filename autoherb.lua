@@ -1,443 +1,730 @@
---[[
-Auto Herb (Confirmed Arg) — Immortal Luck
-- ใช้ Remote: ReplicatedStorage.Remotes.Collect
-- ส่งอาร์กิวเมนต์เดียว "{"..UUID.."}" (string ครอบด้วยวงเล็บปีกกา)
-- หา UUID จาก Attributes / StringValue / PrimaryPart.Attributes (เฉพาะ Model)
-- กัน error PrimaryPart บน Part/SpawnLocation ด้วยการเช็กชนิด + pcall
-- รองรับ ProximityPrompt: ถ้าเจอจะกดให้ก่อน
-- UI แสดงสถานะ/เป้าหมาย/ระยะ/จำนวนเก็บ ลากได้
-Keys: H=Toggle, R=Reset counter
-]]
+-- IMMORTAL LUCK • RARITY 3–5 AUTO FARM (PRO)
+-- Visual ESP + Waypoint + Auto TP/Collect/Hop (locked to workspace/Resources)
+-- Feature pack: Smart Hop, Priority modes, Anti-Stuck, LoS, Hold-aware prompt, Load-aware loop,
+-- whitelist/blacklist, remaining counter, watchdog, persistent stats, hotkeys, FlyingSword remote
+-- ใช้เพื่อทดสอบใน private server เท่านั้น
 
-
----------------- CONFIG ----------------
-local HERB_FOLDER_CANDIDATES = {"Herbs","Spawns","Drops"} -- ถ้าเกมไม่มี โค้ดจะสแกนทั้ง workspace
-local UUID_KEYS              = {"UUID","uuid","Guid","GUID","Id","ID"} -- ชื่อคีย์ยอดฮิต
-local NAME_HINTS             = {"herb","flower","lotus","blossom","plant"} -- แค่ช่วยคัดกรองเบื้องต้น
-
-local COLLECT_RANGE   = 18    -- ระยะที่ถือว่าใกล้พอ
-local MOVE_TIMEOUT    = 6
-local SCAN_INTERVAL   = 0.25
-local SEND_COOLDOWN   = 0.25
-local SUCCESS_WAIT    = 1.2   -- เวลารอดูว่า item หาย (บางเกมไม่ลบ ก็จะถือว่าสำเร็จด้วย cooldown flag)
-
--- ตัดคลาสที่ไม่ใช่เป้าหมาย
-local CLASS_BLACKLIST = { "SpawnLocation", "Camera", "Terrain", "Tool", "Accessory", "Hat" }
-
-
----------------- Services ----------------
+--== Services ==--
 local Players = game:GetService("Players")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TweenService = game:GetService("TweenService")
+local TeleportService = game:GetService("TeleportService")
+local UserInputService = game:GetService("UserInputService")
+local RS = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
-local UIS = game:GetService("UserInputService")
+local HttpService = game:GetService("HttpService")
 
-local player = Players.LocalPlayer
-local character = player.Character or player.CharacterAdded:Wait()
-local humanoid = character:WaitForChild("Humanoid")
+local LP = Players.LocalPlayer
+local Char = LP.Character or LP.CharacterAdded:Wait()
+local HRP = Char:WaitForChild("HumanoidRootPart")
 
--- Remote ตามสปาย
-local CollectRemote = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("Collect")
+--== Config ==--
+local ROOT_NAME = "Resources"             -- ล็อกเฉพาะ workspace/Resources
+local SPEED_STUDS_PER_S = 40              -- ความเร็ว tween
+local SAFE_Y_OFFSET = 2
+local MAX_SCAN_RANGE = 6000               -- ระยะมองหา
+local ONLY_THESE = { [3]=true, [4]=true, [5]=true }  -- เฉพาะ 3/4/5
+local NAME_BLACKLIST = { Trap=true, Dummy=true }     -- กันของไม่ต้องการ
+local COLLECT_RANGE = 12                  -- ระยะกด ProximityPrompt
+local MAX_TARGET_STUCK_TIME = 10          -- วินาทีต่อเป้า
+local UI_POS = UDim2.new(0, 60, 0, 80)
 
+-- Auto/Hop
+local AUTO_ENABLED = true
+local AUTO_HOP_ENABLED = true
+local MAX_HOP = 50
+local EMPTY_GRACE_SECONDS = 1.0           -- เว้นเผื่อ spawn ใหม่
 
----------------- State ----------------
-local AUTO_ON = false
-local lastSend = 0
-local collected = 0
-local usedUUID = {}
+-- Priority
+local PRIORITY_MODE = "Rarity"            -- "Rarity" | "Nearest" | "Score"
 
-local currentName, currentDist, currentUUID = "-", "-", "-"
+-- Remote usage
+local USE_FLYING_SWORD = true             -- เรียกก่อนเคลื่อนที่ไปเป้า
+local FLYING_SWORD_REMOTE = { "Remotes", "FlyingSword" }
+local FLYING_SWORD_ARGS = { true }
 
+-- ชื่อเรียก (ยืนยันแล้ว)
+local RARITY_NAME = { [1]="Common", [2]="Rare", [3]="Legendary", [4]="Tier4", [5]="Tier5" }
 
----------------- Helpers ----------------
-local function isBlacklisted(inst)
-    for _, c in ipairs(CLASS_BLACKLIST) do
-        if inst:IsA(c) then return true end
+--== Globals / Persist ==--
+getgenv().IL_STATS = getgenv().IL_STATS or {collected=0, hopped=0}
+getgenv().IL_VisitedJobs = getgenv().IL_VisitedJobs or {}
+
+--== Helpers ==--
+local function safeParent()
+    local ok,hui = pcall(function() return gethui and gethui() end)
+    if ok and typeof(hui)=="Instance" then return hui end
+    return game.CoreGui or LP:WaitForChild("PlayerGui")
+end
+
+local function getPart(inst)
+    if inst:IsA("BasePart") then return inst end
+    return inst:FindFirstChildWhichIsA("BasePart", true)
+end
+
+local function distance(a, b) return (a - b).Magnitude end
+
+local function gradientFor(num)
+    local gFolder = RS:FindFirstChild("RarityGradients")
+    return gFolder and gFolder:FindFirstChild(tostring(num)) or nil
+end
+
+local function getHRP()
+    if HRP and HRP.Parent then return HRP end
+    if LP.Character then
+        HRP = LP.Character:FindChild("HumanoidRootPart") or LP.Character:FindFirstChild("HumanoidRootPart") or LP.Character:WaitForChild("HumanoidRootPart", 5)
     end
-    return false
+    return HRP
 end
 
-local function getRoot(c)
-    c = c or player.Character
-    if not c then return nil end
-    return c:FindFirstChild("HumanoidRootPart")
+-- LoS check (anti-stuck)
+local function hasLineOfSight(fromPos, toPos)
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Blacklist
+    params.FilterDescendantsInstances = {LP.Character}
+    local dir = toPos - fromPos
+    local result = workspace:Raycast(fromPos, dir, params)
+    return result == nil
 end
 
-local function distanceTo(pos)
-    local root = getRoot()
-    if not root then return math.huge end
-    return (root.Position - pos).Magnitude
+--== Waypoint (Beam) ==--
+local function clearWaypoint()
+    local old = workspace:FindFirstChild("IL_Waypoint_Att0")
+    if old then old:Destroy() end
 end
 
-local function safeGetAttributes(inst)
-    local ok, attrs = pcall(function() return inst:GetAttributes() end)
-    if ok and typeof(attrs)=="table" then return attrs end
-    return {}
+local function setWaypoint(targetPart)
+    clearWaypoint()
+    local _hrp = getHRP()
+    if not _hrp or not targetPart then return end
+    local a = Instance.new("Attachment"); a.Name = "IL_Waypoint_Att0"; a.Parent = _hrp
+    local b = Instance.new("Attachment"); b.Parent = targetPart
+    local beam = Instance.new("Beam")
+    beam.Attachment0, beam.Attachment1 = a, b
+    beam.FaceCamera = true
+    beam.Segments = 50
+    beam.Width0, beam.Width1 = 0.35, 0.35
+    beam.Parent = a
 end
 
-local function getPrimaryPart(inst)
-    if not inst:IsA("Model") then return nil end
-    local ok, pp = pcall(function() return inst.PrimaryPart end)
-    if ok then return pp end
-    return nil
+--== Tween TP (with anti-stuck & snap) ==--
+local currentTween
+local function snapTP(targetPos)
+    local _hrp = getHRP()
+    if _hrp then _hrp.CFrame = CFrame.new(targetPos) end
 end
 
-local function hasUUIDStringValue(inst)
-    for _, ch in ipairs(inst:GetChildren()) do
-        if ch:IsA("StringValue") then
-            for _, k in ipairs(UUID_KEYS) do
-                if ch.Name == k and typeof(ch.Value)=="string" and #ch.Value>10 then
-                    return ch.Value, k
-                end
-            end
-            if typeof(ch.Value)=="string" and #ch.Value>30 and ch.Value:find("%-") then
-                return ch.Value, ch.Name
-            end
-        end
+local function tweenHop(toPos)
+    local _hrp = getHRP()
+    if not _hrp then return end
+    local dist = (_hrp.Position - toPos).Magnitude
+    local t = math.max(0.25, dist / SPEED_STUDS_PER_S)
+    if currentTween and currentTween.PlaybackState == Enum.PlaybackState.Playing then
+        currentTween:Cancel()
     end
-end
-
-local function getUUID(inst)
-    if isBlacklisted(inst) then return nil,nil end
-    if not (inst:IsA("Model") or inst:IsA("BasePart")) then return nil,nil end
-
-    -- 1) Attributes บนตัว inst
-    local attrs = safeGetAttributes(inst)
-    for _, k in ipairs(UUID_KEYS) do
-        local v = attrs[k]
-        if typeof(v)=="string" and #v>10 then return v,k end
-    end
-    for k,v in pairs(attrs) do
-        if typeof(v)=="string" and #v>30 and v:find("%-") then
-            return v,k
-        end
-    end
-
-    -- 2) StringValue ลูก
-    local sv, key = hasUUIDStringValue(inst)
-    if sv then return sv, key end
-
-    -- 3) PrimaryPart.Attributes (เฉพาะ Model)
-    local pp = getPrimaryPart(inst)
-    if pp then
-        local ppAttrs = safeGetAttributes(pp)
-        for _, k2 in ipairs(UUID_KEYS) do
-            local v = ppAttrs[k2]
-            if typeof(v)=="string" and #v>10 then return v,k2 end
-        end
-        for k2,v2 in pairs(ppAttrs) do
-            if typeof(v2)=="string" and #v2>30 and v2:find("%-") then
-                return v2,k2
-            end
-        end
-    end
-
-    return nil,nil
-end
-
-local function getCF(inst)
-    if inst:IsA("Model") and inst.GetPivot then
-        local ok, cf = pcall(function() return inst:GetPivot() end)
-        if ok and typeof(cf)=="CFrame" then return cf end
-    elseif inst:IsA("BasePart") then
-        return inst.CFrame
-    end
-    return nil
-end
-
-local function nameHint(inst)
-    local n = (inst.Name or ""):lower()
-    for _, w in ipairs(NAME_HINTS) do
-        if n:find(w) then return true end
-    end
-    return false
-end
-
--- โฟลเดอร์หลัก (ถ้ามี)
-local HerbsFolder = workspace
-for _, cand in ipairs(HERB_FOLDER_CANDIDATES) do
-    local f = workspace:FindFirstChild(cand)
-    if f then HerbsFolder = f break end
-end
-
-local function findCandidates()
-    local out, scopes = {}, {}
-    if HerbsFolder ~= workspace then table.insert(scopes, HerbsFolder) end
-    table.insert(scopes, workspace)
-    for _, scope in ipairs(scopes) do
-        for _, d in ipairs(scope:GetDescendants()) do
-            if (d:IsA("Model") or d:IsA("BasePart")) and not isBlacklisted(d) then
-                if getUUID(d) or nameHint(d) then
-                    table.insert(out, d)
-                end
-            end
-        end
-    end
-    return out
-end
-
-local function collectable(inst)
-    local uuid, key = getUUID(inst)
-    if not uuid or usedUUID[uuid] then return nil end
-    local cf = getCF(inst)
-    if not cf then return nil end
-    return uuid, key, cf.Position
-end
-
-local function nearestHerb()
-    local best, bestD, bestUUID, bestPos, bestKey
-    for _, inst in ipairs(findCandidates()) do
-        local uuid, key, pos = collectable(inst)
-        if uuid and pos then
-            local d = distanceTo(pos)
-            if not best or d < bestD then
-                best, bestD, bestUUID, bestPos, bestKey = inst, d, uuid, pos, key
-            end
-        end
-    end
-    return best, bestUUID, bestKey, bestPos, bestD
-end
-
--- ProximityPrompt helper (บางเกมวาง prompt ไว้กับต้นไม้)
-local function activatePrompt(prompt)
-    if typeof(prompt)=="Instance" and prompt:IsA("ProximityPrompt") then
-        prompt:InputHoldBegin()
-        task.delay((prompt.HoldDuration or 0)+0.05, function()
-            prompt:InputHoldEnd()
-        end)
-        return true
-    end
-    return false
-end
-
-local function tryPrompt(inst)
-    for _, d in ipairs(inst:GetDescendants()) do
-        if d:IsA("ProximityPrompt") then
-            return activatePrompt(d)
-        end
-    end
-    if inst:IsA("BasePart") then
-        local p = inst:FindFirstChildOfClass("ProximityPrompt")
-        if p then return activatePrompt(p) end
-    end
-    return false
-end
-
--- wrap เป็น "{UUID}" ตามสปาย
-local function wrapBraces(u)
-    if not u then return nil end
-    if not u:match("^%b{}$") then return "{"..u.."}" end
-    return u
-end
-
-local function sendCollect(uuid)
-    local now = time()
-    if now - lastSend < SEND_COOLDOWN then return false end
-    lastSend = now
-    local arg = wrapBraces(uuid)
-    if not arg then return false end
-    local ok = pcall(function() CollectRemote:FireServer(arg) end)
-    return ok
-end
-
-local function waitSuccess(inst, uuid)
-    -- 1) รอ despawn
-    local t0 = time()
-    while time() - t0 < SUCCESS_WAIT do
-        if not inst.Parent then return true end
-        RunService.Heartbeat:Wait()
-    end
-    -- 2) บางเกมไม่ลบโมเดล: mark ว่าเก็บแล้ว กันยิงซ้ำช่วงหนึ่ง
-    usedUUID[uuid] = true
-    return true
-end
-
-local function safeMoveTo(pos, timeout)
-    local root = getRoot()
-    if not root or not humanoid or humanoid.Health <= 0 then return false end
-    humanoid:MoveTo(pos)
-    local start, reached = time(), false
-    local conn = humanoid.MoveToFinished:Connect(function(ok) reached = ok end)
-    while time() - start < (timeout or MOVE_TIMEOUT) do
-        RunService.Heartbeat:Wait()
-        if reached then break end
-        if (root.Position - pos).Magnitude <= COLLECT_RANGE then
-            reached = true
+    currentTween = TweenService:Create(_hrp, TweenInfo.new(t, Enum.EasingStyle.Linear), {CFrame = CFrame.new(toPos)})
+    currentTween:Play()
+    local elapsed = 0
+    while currentTween and currentTween.PlaybackState == Enum.PlaybackState.Playing do
+        local dt = RunService.Heartbeat:Wait()
+        elapsed += dt
+        if elapsed > t + 2 then
+            currentTween:Cancel()
+            snapTP(toPos + Vector3.new(0, SAFE_Y_OFFSET, 0))
             break
         end
     end
-    if conn then conn:Disconnect() end
-    return reached
 end
 
+local function tweenTP(targetPos)
+    local _hrp = getHRP(); if not _hrp then return end
+    local start = _hrp.Position
+    if not hasLineOfSight(start, targetPos) then
+        targetPos = targetPos + Vector3.new(0, 20, 0) -- ยกหัวหลบสิ่งกีดขวาง
+    end
+    local dist = (targetPos - start).Magnitude
+    local step = 20
+    local steps = math.max(1, math.ceil(dist / step))
+    for i = 1, steps do
+        local alpha = i/steps
+        local p = start:Lerp(targetPos, alpha)
+        p = Vector3.new(p.X, p.Y + SAFE_Y_OFFSET, p.Z)
+        tweenHop(p)
+        task.wait(0.03)
+    end
+end
 
----------------- UI ----------------
-local screenGui = Instance.new("ScreenGui")
-screenGui.Name = "AutoHerbUI"
-screenGui.ResetOnSpawn = false
-screenGui.Parent = player:WaitForChild("PlayerGui")
+--== Remote: Flying Sword ==--
+local function useFlyingSword()
+    if not USE_FLYING_SWORD then return end
+    local ok, _ = pcall(function()
+        local rem = RS:WaitForChild(FLYING_SWORD_REMOTE[1])
+        local ev = rem:WaitForChild(FLYING_SWORD_REMOTE[2])
+        ev:FireServer(unpack(FLYING_SWORD_ARGS))
+    end)
+end
 
-local frame = Instance.new("Frame")
-frame.Size = UDim2.fromOffset(320, 190)
-frame.Position = UDim2.fromOffset(60, 120)
-frame.BackgroundColor3 = Color3.fromRGB(22,22,26)
+--== Scan Root ==--
+local ROOT = workspace:WaitForChild(ROOT_NAME) -- ล็อก scan เฉพาะ Resources
+
+--== Targets + ESP ==--
+local targets = {}  -- [part] = {obj=Instance, rarity=number, bb=Billboard, hl=Highlight, lbl=TextLabel}
+
+local function makeESP(part, rarity)
+    local bb = Instance.new("BillboardGui")
+    bb.Name = "IL_ESP"
+    bb.AlwaysOnTop = true
+    bb.Size = UDim2.new(0, 220, 0, 48)
+    bb.StudsOffset = Vector3.new(0, 3.5, 0)
+    bb.Adornee = part
+    bb.Parent = part
+
+    local frame = Instance.new("Frame", bb)
+    frame.Size = UDim2.new(1,0,1,0)
+    frame.BackgroundTransparency = 0.15
+    frame.BorderSizePixel = 0
+    Instance.new("UICorner", frame).CornerRadius = UDim.new(0,8)
+    local g = gradientFor(rarity)
+    if g then g:Clone().Parent = frame end
+
+    local lbl = Instance.new("TextLabel", frame)
+    lbl.BackgroundTransparency = 1
+    lbl.Size = UDim2.new(1,-10,1,-10)
+    lbl.Position = UDim2.new(0,5,0,5)
+    lbl.Font = Enum.Font.GothamSemibold
+    lbl.TextScaled = true
+    lbl.TextColor3 = Color3.fromRGB(255,255,255)
+    lbl.TextStrokeTransparency = 0.5
+
+    local hl = Instance.new("Highlight")
+    hl.Adornee = part
+    hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    hl.FillTransparency = 0.7
+    hl.OutlineTransparency = 0.1
+    hl.Parent = part
+    if rarity==5 then hl.OutlineColor = Color3.fromRGB(255,180,255)
+    elseif rarity==4 then hl.OutlineColor = Color3.fromRGB(180,120,255)
+    elseif rarity==3 then hl.OutlineColor = Color3.fromRGB(120,220,255) end
+
+    return bb, lbl, hl
+end
+
+local function forget(part)
+    local rec = targets[part]
+    if not rec then return end
+    pcall(function() if rec.bb then rec.bb:Destroy() end end)
+    pcall(function() if rec.hl then rec.hl:Destroy() end end)
+    targets[part] = nil
+end
+
+local function attach(inst)
+    local r = inst:GetAttribute("Rarity")
+    if not ONLY_THESE[r] then return end
+    if NAME_BLACKLIST[inst.Name] then return end
+    local part = getPart(inst)
+    if not part or targets[part] then return end
+    local bb, lbl, hl = makeESP(part, r)
+    targets[part] = {obj=inst, rarity=r, bb=bb, lbl=lbl, hl=hl}
+    inst.AncestryChanged:Connect(function(_, parent)
+        if not parent then forget(part) end
+    end)
+end
+
+-- สแกนครั้งแรกเฉพาะใน ROOT (Resources)
+for _,d in ipairs(ROOT:GetDescendants()) do
+    if d:GetAttribute("Rarity") ~= nil then attach(d) end
+end
+
+-- ฟังเฉพาะที่ ROOT
+ROOT.DescendantAdded:Connect(function(d)
+    if d:GetAttribute("Rarity") ~= nil then attach(d) end
+end)
+
+-- ถ้า Resources ถูก recreate (แมพรีโหลด) ให้ rebind ใหม่
+workspace.ChildAdded:Connect(function(c)
+    if c.Name == ROOT_NAME then
+        ROOT = c
+        for part, rec in pairs(targets) do
+            pcall(function() if rec.bb then rec.bb:Destroy() end end)
+            pcall(function() if rec.hl then rec.hl:Destroy() end end)
+            targets[part] = nil
+        end
+        for _,d in ipairs(ROOT:GetDescendants()) do
+            if d:GetAttribute("Rarity") ~= nil then attach(d) end
+        end
+        ROOT.DescendantAdded:Connect(function(d)
+            if d:GetAttribute("Rarity") ~= nil then attach(d) end
+        end)
+    end
+end)
+
+--== Ordering / Priority ==--
+local ordered, idx = {}, 1
+
+local function scoreOf(node)
+    -- คะแนนผสม: rarity*1000 - dist
+    return (node.info.rarity or 0)*1000 - (node.dist or 0)
+end
+
+local function sortNodes(a,b)
+    if PRIORITY_MODE == "Nearest" then
+        if a.dist ~= b.dist then return a.dist < b.dist end
+        return (a.info.rarity or 0) > (b.info.rarity or 0)
+    elseif PRIORITY_MODE == "Score" then
+        return scoreOf(a) > scoreOf(b)
+    else -- "Rarity"
+        if a.info.rarity ~= b.info.rarity then return a.info.rarity > b.info.rarity end
+        return a.dist < b.dist
+    end
+end
+
+local function refreshList()
+    ordered = {}
+    local _hrp = getHRP(); if not _hrp then return end
+    for part,info in pairs(targets) do
+        if part and part.Parent and info and info.obj and info.obj.Parent and info.obj:IsDescendantOf(ROOT) then
+            local dist = distance(_hrp.Position, part.Position)
+            if dist <= MAX_SCAN_RANGE then
+                table.insert(ordered, {part=part, info=info, dist=dist})
+            end
+        end
+    end
+    table.sort(ordered, sortNodes)
+    if #ordered == 0 then idx = 1 else idx = math.clamp(idx, 1, #ordered) end
+end
+
+-- Validity + wait-gone
+local function isValidTarget(part, info)
+    if not part or not part.Parent then return false end
+    if not info or not info.obj or not info.obj.Parent then return false end
+    if not info.obj:IsDescendantOf(ROOT) then return false end
+    local r = info.obj:GetAttribute("Rarity")
+    if not ONLY_THESE[r] then return false end
+    return true
+end
+
+local function waitGoneOrTimeout(part, info, timeout)
+    local t0 = os.clock()
+    while os.clock() - t0 < (timeout or 2.0) do
+        if (not isValidTarget(part, info)) or (not targets[part]) then
+            return true
+        end
+        task.wait(0.05)
+    end
+    return false
+end
+
+--== Visual updater (ESP text & visible) ==--
+task.spawn(function()
+    while true do
+        task.wait(0.2)
+        local _hrp = getHRP(); if not _hrp then continue end
+        for part,info in pairs(targets) do
+            if part and part.Parent then
+                local dist = distance(_hrp.Position, part.Position)
+                if info.lbl then
+                    local name = RARITY_NAME[info.rarity] or ("R"..tostring(info.rarity))
+                    info.lbl.Text = string.format("[%s:%d]  %.0f studs", name, info.rarity, dist)
+                end
+                local visible = dist <= MAX_SCAN_RANGE
+                if info.bb then info.bb.Enabled = visible end
+                if info.hl then info.hl.Enabled = visible end
+            end
+        end
+        refreshList()
+    end
+end)
+
+--== UI ==--
+local gui = Instance.new("ScreenGui", safeParent())
+gui.Name = "IL_AutoFarm_Pro"
+gui.ResetOnSpawn = false
+
+local frame = Instance.new("Frame", gui)
+frame.Size = UDim2.new(0, 400, 0, 190)
+frame.Position = UI_POS
+frame.BackgroundColor3 = Color3.fromRGB(25,25,30)
 frame.BorderSizePixel = 0
-frame.Parent = screenGui
-Instance.new("UICorner", frame).CornerRadius = UDim.new(0,14)
-local stroke = Instance.new("UIStroke", frame)
-stroke.Color = Color3.fromRGB(70,70,80); stroke.Thickness = 1
-local pad = Instance.new("UIPadding", frame)
-pad.PaddingLeft = UDim.new(0,12); pad.PaddingRight = UDim.new(0,12); pad.PaddingTop = UDim.new(0,10)
+Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 12)
 
-local title = Instance.new("TextLabel")
-title.Size = UDim2.new(1,-24,0,22)
+local title = Instance.new("TextLabel", frame)
 title.BackgroundTransparency = 1
+title.Position = UDim2.new(0,10,0,6)
+title.Size = UDim2.new(1,-20,0,20)
 title.Font = Enum.Font.GothamBold
 title.TextSize = 16
-title.TextXAlignment = Enum.TextXAlignment.Left
-title.TextColor3 = Color3.fromRGB(235,235,240)
-title.Text = "🌿 Auto Herb (Collect \"{UUID}\")"
-title.Parent = frame
+title.TextColor3 = Color3.fromRGB(240,240,240)
+title.Text = "Rarity 3–5 Auto Farm (Resources / PRO)"
 
-local toggleBtn = Instance.new("TextButton")
-toggleBtn.Size = UDim2.fromOffset(80,28)
-toggleBtn.Position = UDim2.new(1,-92,0,4)
-toggleBtn.BackgroundColor3 = Color3.fromRGB(120,40,40)
-toggleBtn.TextColor3 = Color3.new(1,1,1)
+local status = Instance.new("TextLabel", frame)
+status.BackgroundTransparency = 1
+status.Position = UDim2.new(0,10,0,34)
+status.Size = UDim2.new(1,-20,0,18)
+status.Font = Enum.Font.Gotham
+status.TextSize = 13
+status.TextXAlignment = Enum.TextXAlignment.Left
+status.TextColor3 = Color3.fromRGB(200,200,210)
+status.Text = "Target: -"
+
+local toggleBtn = Instance.new("TextButton", frame)
+toggleBtn.Size = UDim2.new(0, 90, 0, 26)
+toggleBtn.Position = UDim2.new(0,10,0,60)
+toggleBtn.Text = "Pause"
 toggleBtn.Font = Enum.Font.GothamSemibold
 toggleBtn.TextSize = 14
-toggleBtn.Text = "OFF"
-toggleBtn.Parent = frame
-Instance.new("UICorner", toggleBtn).CornerRadius = UDim.new(0,10)
+toggleBtn.BackgroundColor3 = Color3.fromRGB(40,40,50)
+toggleBtn.TextColor3 = Color3.fromRGB(220,220,255)
+Instance.new("UICorner", toggleBtn).CornerRadius = UDim.new(0,8)
 
-local line = Instance.new("Frame", frame)
-line.Size = UDim2.new(1,-8,0,1)
-line.Position = UDim2.fromOffset(4,36)
-line.BackgroundColor3 = Color3.fromRGB(60,60,70)
-line.BorderSizePixel = 0
+local tpBtn = Instance.new("TextButton", frame)
+tpBtn.Size = UDim2.new(0, 90, 0, 26)
+tpBtn.Position = UDim2.new(0,110,0,60)
+tpBtn.Text = "TP Now"
+tpBtn.Font = Enum.Font.GothamSemibold
+tpBtn.TextSize = 14
+tpBtn.BackgroundColor3 = Color3.fromRGB(40,60,70)
+tpBtn.TextColor3 = Color3.fromRGB(120,255,150)
+Instance.new("UICorner", tpBtn).CornerRadius = UDim.new(0,8)
 
-local list = Instance.new("Frame", frame)
-list.Size = UDim2.new(1,-4,1,-44)
-list.Position = UDim2.fromOffset(2,40)
-list.BackgroundTransparency = 1
+local collectBtn = Instance.new("TextButton", frame)
+collectBtn.Size = UDim2.new(0, 110, 0, 26)
+collectBtn.Position = UDim2.new(0,210,0,60)
+collectBtn.Text = "Collect Now"
+collectBtn.Font = Enum.Font.GothamSemibold
+collectBtn.TextSize = 14
+collectBtn.BackgroundColor3 = Color3.fromRGB(70,60,40)
+collectBtn.TextColor3 = Color3.fromRGB(255,240,170)
+Instance.new("UICorner", collectBtn).CornerRadius = UDim.new(0,8)
 
-local function mk(y, t)
-    local l = Instance.new("TextLabel")
-    l.Size = UDim2.new(1,-4,0,22)
-    l.Position = UDim2.fromOffset(2,y)
-    l.BackgroundTransparency = 1
-    l.Font = Enum.Font.Gotham
-    l.TextSize = 14
-    l.TextXAlignment = Enum.TextXAlignment.Left
-    l.TextColor3 = Color3.fromRGB(210,210,220)
-    l.Text = t
-    l.Parent = list
-    return l
+local hopBtn = Instance.new("TextButton", frame)
+hopBtn.Size = UDim2.new(0, 380, 0, 28)
+hopBtn.Position = UDim2.new(0,10,0,100)
+hopBtn.Text = "Hop (Smart)"
+hopBtn.Font = Enum.Font.GothamSemibold
+hopBtn.TextSize = 14
+hopBtn.BackgroundColor3 = Color3.fromRGB(55,40,40)
+hopBtn.TextColor3 = Color3.fromRGB(255,180,180)
+Instance.new("UICorner", hopBtn).CornerRadius = UDim.new(0,8)
+
+local footer = Instance.new("TextLabel", frame)
+footer.BackgroundTransparency = 1
+footer.Position = UDim2.new(0,10,0,134)
+footer.Size = UDim2.new(0, 200, 0, 24)
+footer.Font = Enum.Font.Gotham
+footer.TextSize = 12
+footer.TextXAlignment = Enum.TextXAlignment.Left
+footer.TextColor3 = Color3.fromRGB(180,180,190)
+footer.Text = "State: Auto=ON • Hop=ON • Mode=Rarity"
+
+local remainingLbl = Instance.new("TextLabel", frame)
+remainingLbl.BackgroundTransparency = 1
+remainingLbl.Position = UDim2.new(0,210,0,134)
+remainingLbl.Size = UDim2.new(0,180,0,24)
+remainingLbl.Font = Enum.Font.Gotham
+remainingLbl.TextSize = 12
+remainingLbl.TextXAlignment = Enum.TextXAlignment.Right
+remainingLbl.TextColor3 = Color3.fromRGB(180,180,190)
+remainingLbl.Text = "Left: -"
+
+local modeBtn = Instance.new("TextButton", frame)
+modeBtn.Size = UDim2.new(0, 120, 0, 26)
+modeBtn.Position = UDim2.new(0,10,0,160)
+modeBtn.Text = "Mode: Rarity"
+modeBtn.Font = Enum.Font.GothamSemibold
+modeBtn.TextSize = 14
+modeBtn.BackgroundColor3 = Color3.fromRGB(40,40,50)
+modeBtn.TextColor3 = Color3.fromRGB(220,220,255)
+Instance.new("UICorner", modeBtn).CornerRadius = UDim.new(0,8)
+
+-- draggable
+do
+    local dragging=false; local startPos; local startInput
+    frame.InputBegan:Connect(function(input)
+        if input.UserInputType==Enum.UserInputType.MouseButton1 then
+            dragging=true; startPos=frame.Position; startInput=input.Position
+            input.Changed:Connect(function()
+                if input.UserInputState==Enum.UserInputState.End then dragging=false end
+            end)
+        end
+    end)
+    UserInputService.InputChanged:Connect(function(input)
+        if dragging and input.UserInputType==Enum.UserInputType.MouseMovement then
+            local d = input.Position - startInput
+            frame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset+d.X, startPos.Y.Scale, startPos.Y.Offset+d.Y)
+        end
+    end)
 end
 
-local statusLbl = mk(0,  "สถานะ: OFF (H=Toggle, R=Reset)")
-local remoteLbl = mk(24, "Remote: ReplicatedStorage/Remotes/Collect")
-local targetLbl = mk(48, "เป้าหมาย: -")
-local distLbl   = mk(72, "ระยะ: -")
-local countLbl  = mk(96, "เก็บแล้ว: 0")
+-- UI helpers
+local function orderedIdx() return ordered[idx] end
 
--- ลากได้
-local dragging, dragStart, startPos = false, nil, nil
-frame.InputBegan:Connect(function(i)
-    if i.UserInputType == Enum.UserInputType.MouseButton1 then
-        dragging = true; dragStart = i.Position; startPos = frame.Position
+local function updateStatus()
+    refreshList()
+    remainingLbl.Text = ("Left: %d"):format(#ordered)
+    if #ordered == 0 then
+        status.Text = "Target: -"
+        clearWaypoint()
+        return
     end
-end)
-frame.InputEnded:Connect(function(i)
-    if i.UserInputType == Enum.UserInputType.MouseButton1 then dragging=false end
-end)
-UIS.InputChanged:Connect(function(i)
-    if dragging and i.UserInputType == Enum.UserInputType.MouseMovement then
-        local d = i.Position - dragStart
-        frame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
-    end
-end)
-
-local function shortUUID(u) if not u or #u<8 then return tostring(u or "-") end return u:sub(1,8).."... end" end
-
-local function updateUI()
-    statusLbl.Text = ("สถานะ: %s (H=Toggle, R=Reset)"):format(AUTO_ON and "ON" or "OFF")
-    targetLbl.Text = ("เป้าหมาย: %s (%s)"):format(currentName or "-", shortUUID(currentUUID or "-"))
-    distLbl.Text   = ("ระยะ: %s"):format(currentDist or "-")
-    countLbl.Text  = ("เก็บแล้ว: %d"):format(collected)
-    toggleBtn.Text = AUTO_ON and "ON" or "OFF"
-    toggleBtn.BackgroundColor3 = AUTO_ON and Color3.fromRGB(40,160,80) or Color3.fromRGB(120,40,40)
+    local node = orderedIdx()
+    local r = node.info.rarity
+    local name = RARITY_NAME[r] or ("R"..tostring(r))
+    status.Text = string.format("Target: %s (R%d) • %.0f studs", name, r, node.dist)
+    setWaypoint(node.part)
 end
-updateUI()
 
 toggleBtn.MouseButton1Click:Connect(function()
-    AUTO_ON = not AUTO_ON
-    updateUI()
+    AUTO_ENABLED = not AUTO_ENABLED
+    toggleBtn.Text = AUTO_ENABLED and "Pause" or "Resume"
+    footer.Text = string.format("State: Auto=%s • Hop=%s • Mode=%s", AUTO_ENABLED and "ON" or "OFF", AUTO_HOP_ENABLED and "ON" or "OFF", PRIORITY_MODE)
 end)
-UIS.InputBegan:Connect(function(input, gp)
-    if gp then return end
-    if input.KeyCode == Enum.KeyCode.H then
-        AUTO_ON = not AUTO_ON
-        updateUI()
-    elseif input.KeyCode == Enum.KeyCode.R then
-        collected = 0
-        usedUUID = {}
-        updateUI()
+
+tpBtn.MouseButton1Click:Connect(function()
+    if #ordered == 0 then return end
+    local part = orderedIdx().part
+    if part and part.Parent then
+        tweenTP(part.Position + Vector3.new(0, SAFE_Y_OFFSET, 0))
     end
 end)
 
-
----------------- Main Loop ----------------
-task.defer(function()
-    while true do
-        if AUTO_ON then
-            if not player.Character or not player.Character:FindFirstChild("HumanoidRootPart") then
-                character = player.Character or player.CharacterAdded:Wait()
-                humanoid = character:WaitForChild("Humanoid")
-            end
-
-            local inst, uuid, _key, pos, dist = nearestHerb()
-            if inst and uuid and pos then
-                currentName, currentUUID = inst.Name, uuid
-                currentDist = string.format("%.1f", dist)
-                updateUI()
-
-                if dist > COLLECT_RANGE then
-                    safeMoveTo(pos, MOVE_TIMEOUT)
-                    local root = getRoot()
-                    if root then
-                        currentDist = string.format("%.1f", (root.Position - pos).Magnitude)
-                        updateUI()
-                    end
-                end
-
-                -- ลองกด ProximityPrompt ก่อน (ถ้ามี)
-                if tryPrompt(inst) then
-                    if waitSuccess(inst, uuid) then
-                        collected += 1
-                        updateUI()
-                        task.wait(0.2)
-                    end
-                else
-                    -- ยิง Collect("{UUID}")
-                    if sendCollect(uuid) then
-                        if waitSuccess(inst, uuid) then
-                            collected += 1
-                            updateUI()
-                            task.wait(0.2)
-                        end
-                    else
-                        task.wait(SCAN_INTERVAL)
-                    end
-                end
+collectBtn.MouseButton1Click:Connect(function()
+    if #ordered == 0 then return end
+    local info = orderedIdx().info
+    local part = orderedIdx().part
+    if not (part and part.Parent) then return end
+    local prompt = info.obj:FindFirstChildWhichIsA("ProximityPrompt", true)
+    local hrp = getHRP()
+    local p = getPart(info.obj)
+    if prompt and hrp and p and (hrp.Position - p.Position).Magnitude <= COLLECT_RANGE then
+        -- Hold-aware
+        if typeof(fireproximityprompt) == "function" then
+            local hd = prompt.HoldDuration or 0
+            if hd <= 0 then
+                pcall(function() fireproximityprompt(prompt) end)
             else
-                currentName, currentUUID, currentDist = "-", "-", "-"
-                updateUI()
-                task.wait(SCAN_INTERVAL)
+                local t0 = os.clock()
+                pcall(function() fireproximityprompt(prompt, 1) end)
+                while os.clock() - t0 < hd + 0.05 do task.wait() end
             end
-        else
-            task.wait(0.25)
         end
     end
 end)
 
-print("[AUTO HERB] Ready — Collect Remote with \"{UUID}\" | H=Toggle, R=Reset")
+-- Priority switch
+modeBtn.MouseButton1Click:Connect(function()
+    if PRIORITY_MODE == "Rarity" then PRIORITY_MODE = "Nearest"
+    elseif PRIORITY_MODE == "Nearest" then PRIORITY_MODE = "Score"
+    else PRIORITY_MODE = "Rarity" end
+    modeBtn.Text = "Mode: "..PRIORITY_MODE
+    footer.Text = string.format("State: Auto=%s • Hop=%s • Mode=%s", AUTO_ENABLED and "ON" or "OFF", AUTO_HOP_ENABLED and "ON" or "OFF", PRIORITY_MODE)
+end)
+
+-- Smart hop button
+hopBtn.MouseButton1Click:Connect(function()
+    local function hopSmart()
+        getgenv().IL_VisitedJobs[game.JobId] = true
+        local ok, res = pcall(function()
+            return HttpService:GetAsync(("https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Asc&limit=100"):format(game.PlaceId))
+        end)
+        if ok and res then
+            local data = HttpService:JSONDecode(res)
+            if data and data.data then
+                for _, s in ipairs(data.data) do
+                    if s.playing and s.id and not getgenv().IL_VisitedJobs[s.id] and s.maxPlayers and s.playing < s.maxPlayers then
+                        getgenv().IL_VisitedJobs[s.id] = true
+                        getgenv().IL_STATS.hopped += 1
+                        TeleportService:TeleportToPlaceInstance(game.PlaceId, s.id, LP)
+                        return
+                    end
+                end
+            end
+        end
+        -- fallback
+        getgenv().IL_STATS.hopped += 1
+        TeleportService:Teleport(game.PlaceId, LP)
+    end
+    hopSmart()
+end)
+
+-- update UI periodically
+task.spawn(function()
+    while true do
+        task.wait(0.25)
+        updateStatus()
+    end
+end)
+
+-- keep HRP on respawn
+LP.CharacterAdded:Connect(function(c)
+    Char = c
+    HRP = c:WaitForChild("HumanoidRootPart")
+end)
+
+--== Prompt helper (hold-aware) ==--
+local function pressPrompt(prompt)
+    if not prompt then return false end
+    if typeof(fireproximityprompt) ~= "function" then return false end
+    local hd = prompt.HoldDuration or 0
+    if hd <= 0 then
+        pcall(function() fireproximityprompt(prompt) end)
+        return true
+    else
+        local t0 = os.clock()
+        pcall(function() fireproximityprompt(prompt, 1) end)
+        while os.clock() - t0 < hd + 0.05 do task.wait() end
+        return true
+    end
+end
+
+local function collectIfNear(info, range)
+    range = range or COLLECT_RANGE
+    local prompt = info.obj and info.obj:FindFirstChildWhichIsA("ProximityPrompt", true)
+    local hrp = getHRP()
+    local p = info.obj and getPart(info.obj)
+    if prompt and hrp and p then
+        if (hrp.Position - p.Position).Magnitude <= range then
+            return pressPrompt(prompt)
+        end
+    end
+    return false
+end
+
+--== Smart Hop (function for auto) ==--
+local function hopSmart()
+    getgenv().IL_VisitedJobs[game.JobId] = true
+    local ok, res = pcall(function()
+        return HttpService:GetAsync(("https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Asc&limit=100"):format(game.PlaceId))
+    end)
+    if ok and res then
+        local data = HttpService:JSONDecode(res)
+        if data and data.data then
+            for _, s in ipairs(data.data) do
+                if s.playing and s.id and not getgenv().IL_VisitedJobs[s.id] and s.maxPlayers and s.playing < s.maxPlayers then
+                    getgenv().IL_VisitedJobs[s.id] = true
+                    getgenv().IL_STATS.hopped += 1
+                    TeleportService:TeleportToPlaceInstance(game.PlaceId, s.id, LP)
+                    return
+                end
+            end
+        end
+    end
+    -- fallback
+    getgenv().IL_STATS.hopped += 1
+    TeleportService:Teleport(game.PlaceId, LP)
+end
+
+local hopCount = 0
+local function hopNow()
+    if AUTO_HOP_ENABLED and hopCount < MAX_HOP then
+        hopCount += 1
+        hopSmart()
+    end
+end
+
+--== Load-aware FPS smoothing ==--
+local fps, alpha = 60, 0.05
+RunService.Heartbeat:Connect(function(dt)
+    local nowFps = 1/dt
+    fps = fps*(1-alpha) + nowFps*alpha
+end)
+local function dynamicWait()
+    if fps > 80 then return 0.10
+    elseif fps > 50 then return 0.15
+    elseif fps > 30 then return 0.22
+    else return 0.30 end
+end
+
+--== Anti-freeze watchdog (movement) ==--
+local lastPos = nil
+local lastMove = os.clock()
+RunService.Heartbeat:Connect(function()
+    local h = getHRP()
+    if not h then return end
+    if lastPos then
+        if (h.Position - lastPos).Magnitude > 1 then
+            lastMove = os.clock()
+        end
+    end
+    lastPos = h.Position
+end)
+
+task.spawn(function()
+    while task.wait(1.0) do
+        if os.clock() - lastMove > 8 then
+            clearWaypoint()
+            refreshList()
+        end
+    end
+end)
+
+--== HOTKEYS ==--
+UserInputService.InputBegan:Connect(function(input, gp)
+    if gp then return end
+    if input.KeyCode == Enum.KeyCode.P then toggleBtn:Activate() end
+    if input.KeyCode == Enum.KeyCode.H then hopBtn:Activate() end
+end)
+
+--== AUTO LOOP: เก็บให้หมดก่อนค่อย hop + เช็ค despawn ==--
+task.spawn(function()
+    while task.wait(dynamicWait()) do
+        if not AUTO_ENABLED then continue end
+
+        refreshList()
+        if #ordered == 0 then
+            -- เฝ้าดูสั้น ๆ เผื่อ spawn ใหม่
+            local t0 = os.clock()
+            local found = false
+            repeat
+                task.wait(0.1)
+                refreshList()
+                if #ordered > 0 then found = true break end
+            until os.clock() - t0 >= EMPTY_GRACE_SECONDS
+
+            if not found then
+                hopNow()
+            end
+        else
+            -- วนเก็บทุกเป้าในรอบนี้
+            local i = 1
+            while i <= #ordered do
+                local node = ordered[i]
+                if not node or not isValidTarget(node.part, node.info) then
+                    i += 1
+                    continue
+                end
+
+                -- Flying sword ก่อนเคลื่อนที่
+                useFlyingSword()
+
+                -- ตั้ง waypoint และไปหาเป้า
+                setWaypoint(node.part)
+                local targetPos = node.part.Position + Vector3.new(0, SAFE_Y_OFFSET, 0)
+                tweenTP(targetPos)
+
+                -- พยายาม collect ภายในเวลาที่กำหนด
+                local started = os.clock()
+                while os.clock() - started < MAX_TARGET_STUCK_TIME do
+                    if not isValidTarget(node.part, node.info) then break end
+                    if collectIfNear(node.info) then
+                        getgenv().IL_STATS.collected += 1
+                        -- รอให้มันหายจาก Resources/targets
+                        waitGoneOrTimeout(node.part, node.info, 2.0)
+                        break
+                    end
+                    task.wait(0.1)
+                end
+
+                -- ไปเป้าถัดไป (ถ้าหายเองกลางคันก็ข้าม)
+                i += 1
+                refreshList()
+            end
+
+            -- เก็บครบ “รอบนี้” แล้ว → เช็คอีกครั้ง ไม่มีจริง ๆ → hop
+            refreshList()
+            if #ordered == 0 then
+                hopNow()
+            end
+        end
+    end
+end)
+
+--== END ==
