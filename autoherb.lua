@@ -1,4 +1,4 @@
--- IMMORTAL LUCK • RARITY 3–5 AUTO (Meditate <-> Hunt, no hop)
+-- IMMORTAL LUCK • RARITY 3–5 AUTO (Meditate <-> Hunt, no hop) • Fast TP + Ram-Into + Remote Collect
 -- ใช้เพื่อทดสอบใน private server เท่านั้น
 
 --== Services ==--
@@ -7,29 +7,40 @@ local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
 local RS = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
-
 local LP = Players.LocalPlayer
 local Char = LP.Character or LP.CharacterAdded:Wait()
 local HRP = Char:WaitForChild("HumanoidRootPart")
 
---== Config (Fast TP tuned) ==--
-local ROOT_NAME          = "Resources"   -- สแกนเฉพาะ workspace/Resources
-local SPEED_STUDS_PER_S  = 220           -- ความเร็ว tween (เดิม 40)
-local MIN_TWEEN_TIME     = 0.08          -- ขั้นต่ำเวลาต่อช็อต (เดิม 0.25)
-local TP_STEP_STUDS      = 120           -- ความยาวก้าวในการ TP (เดิม 20)
-local HEIGHT_BOOST       = 30            -- ยกหัวหลบสิ่งกีดขวางเมื่อไม่มี LoS
-local SAFE_Y_OFFSET      = 2
-local MAX_SCAN_RANGE     = 6000
-local ONLY_THESE         = { [3]=true, [4]=true, [5]=true }  -- เฉพาะ R3/4/5
-local NAME_BLACKLIST     = { Trap=true, Dummy=true }         -- กันของไม่ต้องการ
-local COLLECT_RANGE      = 12
-local MAX_TARGET_STUCK_TIME = 10
-local UI_POS             = UDim2.new(0, 60, 0, 80)
-local PRIORITY_MODE      = "Rarity"      -- "Rarity" | "Nearest" | "Score"
-local AUTO_ENABLED       = true
+--== Config (Fast TP tuned + Options) ==--
+local ROOT_NAME            = "Resources"   -- สแกนเฉพาะ workspace/Resources
+local SPEED_STUDS_PER_S    = 220           -- ความเร็ว tween (เดิม 40)
+local MIN_TWEEN_TIME       = 0.08          -- ขั้นต่ำเวลาต่อช็อต (เดิม 0.25)
+local TP_STEP_STUDS        = 120           -- ความยาวก้าวในการ TP (เดิม 20)
+local HEIGHT_BOOST         = 30            -- ยกหัวหลบสิ่งกีดขวางเมื่อไม่มี LoS
+local SAFE_Y_OFFSET        = 2
+local MAX_SCAN_RANGE       = 6000
+local ONLY_THESE           = { [3]=true, [4]=true, [5]=true }  -- เฉพาะ R3/4/5
+local NAME_BLACKLIST       = { Trap=true, Dummy=true }         -- กันของไม่ต้องการ
+local COLLECT_RANGE        = 14            -- เผื่อระยะเก็บนิดหน่อย
+local MAX_TARGET_STUCK_TIME= 10
+local UI_POS               = UDim2.new(0, 60, 0, 80)
+local PRIORITY_MODE        = "Rarity"      -- "Rarity" | "Nearest" | "Score"
+local AUTO_ENABLED         = true
+local MEDITATE_POS         = Vector3.new(-519.435, -5.452, -386.665)
 
--- จุดนั่งสมาธิ (ตามรูป)
-local MEDITATE_POS = Vector3.new(-519.435, -5.452, -386.665)
+-- == Approach Assist ==
+local COLLECT_WITH_SWORD   = false         -- false = ปิดดาบก่อนเก็บเพื่อให้ Prompt ติดง่ายขึ้น
+local APPROACH_RINGS       = {6, 9, 12, 16}
+local APPROACH_STEP_DEG    = 30
+local DROP_HEIGHT          = 18
+
+-- == Ram-into target ==
+local RAM_INTO_ENABLED     = true          -- เปิดโหมดชน
+local RAM_OVERSHOOT        = 8             -- พุ่งเลยเป้าไปกี่ studs แล้วค่อยวกกลับ
+local USE_NOCLIP_FOR_RAM   = true          -- เปิด noclip ชั่วคราวตอนชน
+
+-- == Remote Collect ==
+local USE_REMOTE_COLLECT   = true          -- ยิง Remotes.Collect ก่อนเสมอ
 
 --== Labels ==--
 local RARITY_NAME = { [1]="Common", [2]="Rare", [3]="Legendary", [4]="Tier4", [5]="Tier5" }
@@ -62,6 +73,27 @@ local function getHRP()
 end
 
 local function isNear(pos, target, r) return (pos - target).Magnitude <= (r or 4) end
+
+-- noclip ชั่วคราว (สำหรับ Ram-Into)
+local __origCollide = nil
+local function setCharacterNoClip(on)
+    if on then
+        if __origCollide then return end
+        __origCollide = {}
+        for _,p in ipairs(Char:GetDescendants()) do
+            if p:IsA("BasePart") then
+                __origCollide[p] = p.CanCollide
+                p.CanCollide = false
+            end
+        end
+    else
+        if not __origCollide then return end
+        for p,can in pairs(__origCollide) do
+            if p and p.Parent then p.CanCollide = can end
+        end
+        __origCollide = nil
+    end
+end
 
 --== Line-of-sight ==--
 local function hasLineOfSight(fromPos, toPos)
@@ -122,17 +154,16 @@ local function tweenTP(targetPos)
     local _hrp = getHRP(); if not _hrp then return end
     local start = _hrp.Position
     if not hasLineOfSight(start, targetPos) then
-        targetPos = targetPos + Vector3.new(0, HEIGHT_BOOST, 0) -- ยกหัวหลบสิ่งกีดขวาง
+        targetPos = targetPos + Vector3.new(0, HEIGHT_BOOST, 0)
     end
     local dist  = (targetPos - start).Magnitude
     local step  = TP_STEP_STUDS
     local steps = math.max(1, math.ceil(dist / step))
-
     for i = 1, steps do
         local p = start:Lerp(targetPos, i/steps)
         p = Vector3.new(p.X, p.Y + SAFE_Y_OFFSET, p.Z)
         tweenHop(p)
-        -- เร็วขึ้น: ไม่ต้องหน่วง 0.03s
+        -- เร็วขึ้น: ไม่ต้องหน่วง
     end
 end
 
@@ -140,29 +171,92 @@ local function tpTo(vec3)
     tweenTP(vec3 + Vector3.new(0, SAFE_Y_OFFSET, 0))
 end
 
---== Remotes: Cultivate/FlyingSword ==--
-local function startCultivate()
-    local rem = RS:WaitForChild("Remotes")
-    local ev = rem:WaitForChild("Cultivate")
-    pcall(function() ev:FireServer(true) end)   -- นั่งสมาธิ
+--== Remotes: Cultivate/FlyingSword (มี debounce กันสแปม) ==--
+local CUL_MIN_INTERVAL = 1.2
+local CultivateState = { on = false, lastSend = 0 }
+local function setCultivate(desired)
+    local now = os.clock()
+    if CultivateState.on == desired and (now - CultivateState.lastSend) < CUL_MIN_INTERVAL then
+        return
+    end
+    CultivateState.lastSend = now
+    CultivateState.on = desired
+    local ev = RS:WaitForChild("Remotes"):WaitForChild("Cultivate")
+    pcall(function() ev:FireServer(desired) end)
 end
-
-local function stopCultivate()
-    local rem = RS:WaitForChild("Remotes")
-    local ev = rem:WaitForChild("Cultivate")
-    pcall(function() ev:FireServer(false) end)  -- เลิกนั่ง
-end
+local function startCultivate() setCultivate(true) end
+local function stopCultivate()  setCultivate(false) end
 
 local function useFlyingSword()
-    local rem = RS:WaitForChild("Remotes")
-    local ev = rem:WaitForChild("FlyingSword")
-    pcall(function() ev:FireServer(true) end)   -- เปิดดาบ
+    local ev = RS:WaitForChild("Remotes"):WaitForChild("FlyingSword")
+    pcall(function() ev:FireServer(true) end)
+end
+local function stopFlyingSword()
+    local ev = RS:WaitForChild("Remotes"):WaitForChild("FlyingSword")
+    pcall(function() ev:FireServer(false) end)
 end
 
-local function stopFlyingSword()
-    local rem = RS:WaitForChild("Remotes")
-    local ev  = rem:WaitForChild("FlyingSword")
-    pcall(function() ev:FireServer(false) end)  -- ปิดดาบ
+--== Remote Collect Helpers ==--
+local function _normalizeId(id)
+    if not id or type(id) ~= "string" then return nil end
+    id = id:gsub("%s+", "")
+    if id == "" then return nil end
+    if id:sub(1,1) ~= "{" then id = "{"..id.."}" end
+    return id
+end
+
+local function _findCollectIdFromInst(inst)
+    if not inst or not inst.Parent then return nil end
+    local keys = {
+        "CollectId","HerbId","ResourceId","ObjectId","Id","ID",
+        "Guid","GUID","UUID","Uid","uid","HerbUUID","RootId"
+    }
+    for _,k in ipairs(keys) do
+        local v = inst:GetAttribute(k)
+        if v and type(v)=="string" and #v>0 then
+            return _normalizeId(v)
+        end
+    end
+    for _,d in ipairs(inst:GetDescendants()) do
+        if d:IsA("StringValue") then
+            local name = d.Name:lower()
+            if name=="collectid" or name=="herbid" or name=="resourceid" or
+               name=="objectid" or name=="id" or name=="guid" or
+               name=="uuid" or name=="uid" or name=="herbuuid" or name=="rootid" then
+                if d.Value and d.Value ~= "" then
+                    return _normalizeId(d.Value)
+                end
+            end
+        end
+    end
+    local m = string.match(inst.Name, "{[%x%-]+}")
+    if m then return m end
+    return nil
+end
+
+local function waitGoneOrTimeout(part, info, timeout)
+    local t0 = os.clock()
+    while os.clock() - t0 < (timeout or 1.2) do
+        if not part or not part.Parent or not info or not info.obj or not info.obj.Parent then
+            return true
+        end
+        task.wait(0.05)
+    end
+    return false
+end
+
+local function collectViaRemote(info, part, timeout)
+    if not USE_REMOTE_COLLECT then return false end
+    local id = _findCollectIdFromInst(info and info.obj)
+    if not id then return false end
+    local ok, err = pcall(function()
+        RS:WaitForChild("Remotes"):WaitForChild("Collect"):FireServer(id)
+    end)
+    if not ok then
+        warn("[IL] Collect remote failed:", err)
+        return false
+    end
+    return waitGoneOrTimeout(part, info, timeout or 1.2)
 end
 
 --== Scan Root ==--
@@ -234,7 +328,6 @@ end
 for _,d in ipairs(ROOT:GetDescendants()) do
     if d:GetAttribute("Rarity") ~= nil then attach(d) end
 end
-
 ROOT.DescendantAdded:Connect(function(d)
     if d:GetAttribute("Rarity") ~= nil then attach(d) end
 end)
@@ -295,15 +388,68 @@ local function isValidTarget(part, info)
     return true
 end
 
-local function waitGoneOrTimeout(part, info, timeout)
-    local t0 = os.clock()
-    while os.clock() - t0 < (timeout or 2.0) do
-        if (not isValidTarget(part, info)) or (not targets[part]) then
-            return true
+--== Approach Helpers ==--
+local function closeEnough(hrpPos, targetPos)
+    return (hrpPos - targetPos).Magnitude <= (COLLECT_RANGE + 1)
+end
+
+local function approachTarget(part)
+    local hrp = getHRP()
+    if not (hrp and part and part.Parent) then return false end
+    local tpos = part.Position
+
+    -- ตรงดิ่งก่อน
+    tpTo(tpos)
+    if closeEnough(hrp.Position, tpos) then return true end
+
+    -- ยกหัวแล้วลง
+    tpTo(tpos + Vector3.new(0, DROP_HEIGHT, 0))
+    tpTo(tpos)
+    if closeEnough(getHRP().Position, tpos) then return true end
+
+    -- ล้อมวงตามรัศมีและมุม
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Blacklist
+    params.FilterDescendantsInstances = {LP.Character}
+
+    for _,radius in ipairs(APPROACH_RINGS) do
+        for deg = 0, 360-APPROACH_STEP_DEG, APPROACH_STEP_DEG do
+            local r = math.rad(deg)
+            local candidate = tpos + Vector3.new(math.cos(r)*radius, SAFE_Y_OFFSET, math.sin(r)*radius)
+            local dir = candidate - hrp.Position
+            local hit = workspace:Raycast(hrp.Position, dir, params)
+            if not hit then
+                tpTo(candidate)
+                tpTo(tpos)
+                if closeEnough(getHRP().Position, tpos) then
+                    return true
+                end
+            end
         end
-        task.wait(0.05)
     end
-    return false
+
+    -- สุดท้าย: snap ใกล้เป้า
+    local _hrp = getHRP()
+    if _hrp then _hrp.CFrame = CFrame.new(tpos + Vector3.new(0, SAFE_Y_OFFSET + 1.5, 0)) end
+    return closeEnough(getHRP().Position, tpos)
+end
+
+local function ramInto(part)
+    if not RAM_INTO_ENABLED then return false end
+    local hrp = getHRP()
+    if not (hrp and part and part.Parent) then return false end
+    local tpos = part.Position
+    local dir  = (tpos - hrp.Position)
+    if dir.Magnitude < 1e-3 then dir = Vector3.new(0,1,0) else dir = dir.Unit end
+
+    if USE_NOCLIP_FOR_RAM then setCharacterNoClip(true) end
+    tweenTP(tpos + Vector3.new(0, HEIGHT_BOOST, 0)) -- ยกหัว
+    tweenTP(tpos + dir * RAM_OVERSHOOT)             -- พุ่งเลย
+    tweenTP(tpos)                                   -- วกกลับ
+    if USE_NOCLIP_FOR_RAM then setCharacterNoClip(false) end
+
+    local hrp2 = getHRP()
+    return hrp2 and closeEnough(hrp2.Position, tpos)
 end
 
 --== Visual updater ==--
@@ -464,14 +610,19 @@ tpBtn.MouseButton1Click:Connect(function()
     stopFlyingSword()         -- ปิดดาบก่อนทุกครั้งที่กลับมานั่ง
     tpTo(MEDITATE_POS)
     task.wait(0.05)
-    startCultivate()
+    startCultivate()          -- ไม่สแปม เพราะมี debounce
 end)
 
 collectBtn.MouseButton1Click:Connect(function()
     if #ordered == 0 then return end
-    local info = orderedIdx().info
-    local part = orderedIdx().part
+    local node = orderedIdx()
+    local info, part = node.info, node.part
     if not (part and part.Parent) then return end
+
+    -- ยิง Remote ก่อน
+    if collectViaRemote(info, part, 1.2) then return end
+
+    -- ไม่ได้ -> fallback prompt
     local prompt = info.obj:FindFirstChildWhichIsA("ProximityPrompt", true)
     local hrp = getHRP()
     local p = getPart(info.obj)
@@ -509,8 +660,7 @@ LP.CharacterAdded:Connect(function(c)
     Char = c
     HRP = c:WaitForChild("HumanoidRootPart")
     task.delay(0.5, function()
-        -- กันตอนเข้ามาใหม่แล้วยังคัลติอยู่
-        stopCultivate()
+        stopCultivate() -- กันติดสถานะคัลติ
     end)
 end)
 
@@ -569,7 +719,6 @@ RunService.Heartbeat:Connect(function()
     end
     lastPos = h.Position
 end)
-
 task.spawn(function()
     while task.wait(1.0) do
         if os.clock() - lastMove > 8 then
@@ -586,23 +735,25 @@ local EMPTY_GRACE = 0.5
 task.spawn(function()
     while task.wait(dynamicWait()) do
         if not AUTO_ENABLED then continue end
-
         refreshList()
 
         if MODE == "Meditate" then
             if #ordered == 0 then
                 local hrp = getHRP()
                 if hrp and not isNear(hrp.Position, MEDITATE_POS, 6) then
+                    stopFlyingSword()
                     tpTo(MEDITATE_POS)
                 end
-                startCultivate()
+                if not CultivateState.on then
+                    startCultivate()
+                end
                 task.wait(EMPTY_GRACE)
                 refreshList()
                 if #ordered > 0 then
+                    stopCultivate()
                     MODE = "Hunt"
                 end
             else
-                -- มีเป้าแล้ว -> ลุกขึ้นล่า
                 stopCultivate()
                 MODE = "Hunt"
             end
@@ -625,18 +776,47 @@ task.spawn(function()
                     useFlyingSword()
                     task.wait(0.12)
 
-                    -- ไปเก็บ
                     setWaypoint(node.part)
-                    tpTo(node.part.Position)
 
-                    local t0 = os.clock()
-                    while os.clock() - t0 < MAX_TARGET_STUCK_TIME do
-                        if not isValidTarget(node.part, node.info) then break end
-                        if collectIfNear(node.info) then
-                            waitGoneOrTimeout(node.part, node.info, 1.2)
-                            break
+                    -- ★ พุ่งชนเข้าเป้า (ram-into) ก่อน
+                    local ok = ramInto(node.part)
+                    if not ok then
+                        -- ถ้าไม่เข้าเขต -> ใช้ approach assist ล้อมมุม
+                        ok = approachTarget(node.part)
+                        if not ok then
+                            -- ยังไม่ถึงจริง ๆ ก็ลองตรง ๆ อีกครั้ง
+                            tpTo(node.part.Position)
                         end
-                        task.wait(0.08)
+                    end
+
+                    -- ★ ปิดดาบชั่วคราวก่อนเก็บ (ถ้าตั้งค่า)
+                    if not COLLECT_WITH_SWORD then
+                        stopFlyingSword()
+                        task.wait(0.05)
+                    end
+
+                    -- ★ ยิง Remote Collect ก่อน
+                    local done = false
+                    if collectViaRemote(node.info, node.part, 1.2) then
+                        done = true
+                    else
+                        -- Fallback: Prompt (hold-aware)
+                        local t0 = os.clock()
+                        while os.clock() - t0 < MAX_TARGET_STUCK_TIME do
+                            if not isValidTarget(node.part, node.info) then break end
+                            if collectIfNear(node.info) then
+                                waitGoneOrTimeout(node.part, node.info, 1.2)
+                                done = true
+                                break
+                            end
+                            task.wait(0.08)
+                        end
+                    end
+
+                    -- เปิดดาบกลับถ้าปิดไว้
+                    if not COLLECT_WITH_SWORD then
+                        task.wait(0.05)
+                        useFlyingSword()
                     end
                 end
 
