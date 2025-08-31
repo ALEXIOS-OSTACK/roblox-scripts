@@ -12,23 +12,26 @@ local LP = Players.LocalPlayer
 local Char = LP.Character or LP.CharacterAdded:Wait()
 local HRP = Char:WaitForChild("HumanoidRootPart")
 
---== Config ==--
-local ROOT_NAME = "Resources"             -- ล็อกสแกนเฉพาะ workspace/Resources
-local SPEED_STUDS_PER_S = 40
-local SAFE_Y_OFFSET = 2
-local MAX_SCAN_RANGE = 6000
-local ONLY_THESE = { [3]=true, [4]=true, [5]=true }  -- R3/4/5 เท่านั้น
-local NAME_BLACKLIST = { Trap=true, Dummy=true }     -- กันของไม่ต้องการ
-local COLLECT_RANGE = 12
+--== Config (Fast TP tuned) ==--
+local ROOT_NAME          = "Resources"   -- สแกนเฉพาะ workspace/Resources
+local SPEED_STUDS_PER_S  = 220           -- ความเร็ว tween (เดิม 40)
+local MIN_TWEEN_TIME     = 0.08          -- ขั้นต่ำเวลาต่อช็อต (เดิม 0.25)
+local TP_STEP_STUDS      = 120           -- ความยาวก้าวในการ TP (เดิม 20)
+local HEIGHT_BOOST       = 30            -- ยกหัวหลบสิ่งกีดขวางเมื่อไม่มี LoS
+local SAFE_Y_OFFSET      = 2
+local MAX_SCAN_RANGE     = 6000
+local ONLY_THESE         = { [3]=true, [4]=true, [5]=true }  -- เฉพาะ R3/4/5
+local NAME_BLACKLIST     = { Trap=true, Dummy=true }         -- กันของไม่ต้องการ
+local COLLECT_RANGE      = 12
 local MAX_TARGET_STUCK_TIME = 10
-local UI_POS = UDim2.new(0, 60, 0, 80)
-local PRIORITY_MODE = "Rarity"            -- "Rarity" | "Nearest" | "Score"
-local AUTO_ENABLED = true
+local UI_POS             = UDim2.new(0, 60, 0, 80)
+local PRIORITY_MODE      = "Rarity"      -- "Rarity" | "Nearest" | "Score"
+local AUTO_ENABLED       = true
 
--- จุดนั่งสมาธิ (จากภาพ)
+-- จุดนั่งสมาธิ (ตามรูป)
 local MEDITATE_POS = Vector3.new(-519.435, -5.452, -386.665)
 
---== Labels/Pretty ==--
+--== Labels ==--
 local RARITY_NAME = { [1]="Common", [2]="Rare", [3]="Legendary", [4]="Tier4", [5]="Tier5" }
 
 --== Helpers ==--
@@ -59,7 +62,6 @@ local function getHRP()
 end
 
 local function isNear(pos, target, r) return (pos - target).Magnitude <= (r or 4) end
-local function tpTo(vec3) end -- fwd declare (นิยามจริงอยู่หลัง tween funcs)
 
 --== Line-of-sight ==--
 local function hasLineOfSight(fromPos, toPos)
@@ -91,18 +93,14 @@ local function setWaypoint(targetPart)
     beam.Parent = a
 end
 
---== Tween TP (with snap fail-safe) ==--
+--== TP (tween + snap fail-safe) ==--
 local currentTween
-local function snapTP(targetPos)
-    local _hrp = getHRP()
-    if _hrp then _hrp.CFrame = CFrame.new(targetPos) end
-end
 
 local function tweenHop(toPos)
     local _hrp = getHRP()
     if not _hrp then return end
     local dist = (_hrp.Position - toPos).Magnitude
-    local t = math.max(0.25, dist / SPEED_STUDS_PER_S)
+    local t = math.max(MIN_TWEEN_TIME, dist / SPEED_STUDS_PER_S)
     if currentTween and currentTween.PlaybackState == Enum.PlaybackState.Playing then
         currentTween:Cancel()
     end
@@ -114,7 +112,7 @@ local function tweenHop(toPos)
         elapsed += dt
         if elapsed > t + 2 then
             currentTween:Cancel()
-            snapTP(toPos + Vector3.new(0, SAFE_Y_OFFSET, 0))
+            _hrp.CFrame = CFrame.new(toPos + Vector3.new(0, SAFE_Y_OFFSET, 0))
             break
         end
     end
@@ -124,47 +122,47 @@ local function tweenTP(targetPos)
     local _hrp = getHRP(); if not _hrp then return end
     local start = _hrp.Position
     if not hasLineOfSight(start, targetPos) then
-        targetPos = targetPos + Vector3.new(0, 20, 0)
+        targetPos = targetPos + Vector3.new(0, HEIGHT_BOOST, 0) -- ยกหัวหลบสิ่งกีดขวาง
     end
-    local dist = (targetPos - start).Magnitude
-    local step = 20
+    local dist  = (targetPos - start).Magnitude
+    local step  = TP_STEP_STUDS
     local steps = math.max(1, math.ceil(dist / step))
+
     for i = 1, steps do
-        local alpha = i/steps
-        local p = start:Lerp(targetPos, alpha)
+        local p = start:Lerp(targetPos, i/steps)
         p = Vector3.new(p.X, p.Y + SAFE_Y_OFFSET, p.Z)
         tweenHop(p)
-        task.wait(0.03)
+        -- เร็วขึ้น: ไม่ต้องหน่วง 0.03s
     end
 end
 
-tpTo = function(vec3)
+local function tpTo(vec3)
     tweenTP(vec3 + Vector3.new(0, SAFE_Y_OFFSET, 0))
 end
 
---== Remotes: Cultivate/FlyingSword (สำคัญ) ==--
+--== Remotes: Cultivate/FlyingSword ==--
 local function startCultivate()
     local rem = RS:WaitForChild("Remotes")
     local ev = rem:WaitForChild("Cultivate")
-    pcall(function() ev:FireServer(true) end)  -- นั่งสมาธิ
+    pcall(function() ev:FireServer(true) end)   -- นั่งสมาธิ
 end
 
 local function stopCultivate()
     local rem = RS:WaitForChild("Remotes")
     local ev = rem:WaitForChild("Cultivate")
-    pcall(function() ev:FireServer(false) end) -- เลิกนั่ง
+    pcall(function() ev:FireServer(false) end)  -- เลิกนั่ง
 end
 
 local function useFlyingSword()
     local rem = RS:WaitForChild("Remotes")
     local ev = rem:WaitForChild("FlyingSword")
-    pcall(function() ev:FireServer(true) end)
+    pcall(function() ev:FireServer(true) end)   -- เปิดดาบ
 end
 
 local function stopFlyingSword()
     local rem = RS:WaitForChild("Remotes")
     local ev  = rem:WaitForChild("FlyingSword")
-    pcall(function() ev:FireServer(false) end)
+    pcall(function() ev:FireServer(false) end)  -- ปิดดาบ
 end
 
 --== Scan Root ==--
@@ -243,19 +241,18 @@ end)
 
 workspace.ChildAdded:Connect(function(c)
     if c.Name == ROOT_NAME then
-        -- ROOT recreate
+        ROOT = c
         for part, rec in pairs(targets) do
             pcall(function() if rec.bb then rec.bb:Destroy() end end)
             pcall(function() if rec.hl then rec.hl:Destroy() end end)
             targets[part] = nil
         end
-        for _,d in ipairs(c:GetDescendants()) do
+        for _,d in ipairs(ROOT:GetDescendants()) do
             if d:GetAttribute("Rarity") ~= nil then attach(d) end
         end
-        c.DescendantAdded:Connect(function(d)
+        ROOT.DescendantAdded:Connect(function(d)
             if d:GetAttribute("Rarity") ~= nil then attach(d) end
         end)
-        ROOT = c
     end
 end)
 
@@ -464,10 +461,10 @@ toggleBtn.MouseButton1Click:Connect(function()
 end)
 
 tpBtn.MouseButton1Click:Connect(function()
-    stopFlyingSword()         -- ปิดดาบก่อน
-    tpTo(MEDITATE_POS)        -- TP กลับจุดนั่ง
+    stopFlyingSword()         -- ปิดดาบก่อนทุกครั้งที่กลับมานั่ง
+    tpTo(MEDITATE_POS)
     task.wait(0.05)
-    startCultivate()          -- นั่งสมาธิ
+    startCultivate()
 end)
 
 collectBtn.MouseButton1Click:Connect(function()
@@ -624,9 +621,9 @@ task.spawn(function()
 
                     -- ลำดับบังคับ: Cultivate(false) -> FlyingSword(true)
                     stopCultivate()
-                    task.wait(0.15)
+                    task.wait(0.12)
                     useFlyingSword()
-                    task.wait(0.15)
+                    task.wait(0.12)
 
                     -- ไปเก็บ
                     setWaypoint(node.part)
@@ -639,7 +636,7 @@ task.spawn(function()
                             waitGoneOrTimeout(node.part, node.info, 1.2)
                             break
                         end
-                        task.wait(0.1)
+                        task.wait(0.08)
                     end
                 end
 
