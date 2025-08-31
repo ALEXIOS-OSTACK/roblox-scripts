@@ -1,49 +1,35 @@
--- IMMORTAL LUCK • RARITY 3–5 AUTO FARM (PRO, Cultivate(false) -> FlyingSword(true))
+-- IMMORTAL LUCK • RARITY 3–5 AUTO (Meditate <-> Hunt, no hop)
 -- ใช้เพื่อทดสอบใน private server เท่านั้น
 
 --== Services ==--
 local Players = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
-local TeleportService = game:GetService("TeleportService")
 local UserInputService = game:GetService("UserInputService")
 local RS = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
-local HttpService = game:GetService("HttpService")
 
 local LP = Players.LocalPlayer
 local Char = LP.Character or LP.CharacterAdded:Wait()
 local HRP = Char:WaitForChild("HumanoidRootPart")
 
 --== Config ==--
-local ROOT_NAME = "Resources"             -- ล็อกเฉพาะ workspace/Resources
-local SPEED_STUDS_PER_S = 40              -- tween speed
+local ROOT_NAME = "Resources"             -- ล็อกสแกนเฉพาะ workspace/Resources
+local SPEED_STUDS_PER_S = 40
 local SAFE_Y_OFFSET = 2
-local MAX_SCAN_RANGE = 6000               -- ระยะสแกน
-local ONLY_THESE = { [3]=true, [4]=true, [5]=true }  -- เฉพาะ 3/4/5
-local NAME_BLACKLIST = { Trap=true, Dummy=true }
+local MAX_SCAN_RANGE = 6000
+local ONLY_THESE = { [3]=true, [4]=true, [5]=true }  -- R3/4/5 เท่านั้น
+local NAME_BLACKLIST = { Trap=true, Dummy=true }     -- กันของไม่ต้องการ
 local COLLECT_RANGE = 12
 local MAX_TARGET_STUCK_TIME = 10
 local UI_POS = UDim2.new(0, 60, 0, 80)
-
--- Auto/Hop
-local AUTO_ENABLED = true
-local AUTO_HOP_ENABLED = true
-local MAX_HOP = 50
-local EMPTY_GRACE_SECONDS = 1.0
-
--- Priority
 local PRIORITY_MODE = "Rarity"            -- "Rarity" | "Nearest" | "Score"
+local AUTO_ENABLED = true
 
--- Remote usage (สำคัญ: ลำดับ Cultivate(false) -> FlyingSword(true))
-local USE_FLYING_SWORD = true
-local FLYING_SWORD_ARGS = { true }
+-- จุดนั่งสมาธิ (จากภาพ)
+local MEDITATE_POS = Vector3.new(-519.435, -5.452, -386.665)
 
--- ชื่อเรียก
+--== Labels/Pretty ==--
 local RARITY_NAME = { [1]="Common", [2]="Rare", [3]="Legendary", [4]="Tier4", [5]="Tier5" }
-
---== Persist ==--
-getgenv().IL_STATS = getgenv().IL_STATS or {collected=0, hopped=0}
-getgenv().IL_VisitedJobs = getgenv().IL_VisitedJobs or {}
 
 --== Helpers ==--
 local function safeParent()
@@ -72,7 +58,10 @@ local function getHRP()
     return HRP
 end
 
--- LoS check (กันติดสิ่งกีดขวาง)
+local function isNear(pos, target, r) return (pos - target).Magnitude <= (r or 4) end
+local function tpTo(vec3) end -- fwd declare (นิยามจริงอยู่หลัง tween funcs)
+
+--== Line-of-sight ==--
 local function hasLineOfSight(fromPos, toPos)
     local params = RaycastParams.new()
     params.FilterType = Enum.RaycastFilterType.Blacklist
@@ -102,7 +91,7 @@ local function setWaypoint(targetPart)
     beam.Parent = a
 end
 
---== TP (tween + snap fail-safe) ==--
+--== Tween TP (with snap fail-safe) ==--
 local currentTween
 local function snapTP(targetPos)
     local _hrp = getHRP()
@@ -149,19 +138,27 @@ local function tweenTP(targetPos)
     end
 end
 
---== Remotes (สำคัญ) ==--
+tpTo = function(vec3)
+    tweenTP(vec3 + Vector3.new(0, SAFE_Y_OFFSET, 0))
+end
+
+--== Remotes: Cultivate/FlyingSword (สำคัญ) ==--
+local function startCultivate()
+    local rem = RS:WaitForChild("Remotes")
+    local ev = rem:WaitForChild("Cultivate")
+    pcall(function() ev:FireServer(true) end)  -- นั่งสมาธิ
+end
+
 local function stopCultivate()
     local rem = RS:WaitForChild("Remotes")
     local ev = rem:WaitForChild("Cultivate")
-    local args = { false }
-    pcall(function() ev:FireServer(unpack(args)) end)
+    pcall(function() ev:FireServer(false) end) -- เลิกนั่ง
 end
 
 local function useFlyingSword()
-    if not USE_FLYING_SWORD then return end
     local rem = RS:WaitForChild("Remotes")
     local ev = rem:WaitForChild("FlyingSword")
-    pcall(function() ev:FireServer(unpack(FLYING_SWORD_ARGS)) end)
+    pcall(function() ev:FireServer(true) end)
 end
 
 --== Scan Root ==--
@@ -257,16 +254,14 @@ end)
 
 --== Ordering / Priority ==--
 local ordered, idx = {}, 1
-
 local function scoreOf(node) return (node.info.rarity or 0)*1000 - (node.dist or 0) end
-
 local function sortNodes(a,b)
     if PRIORITY_MODE == "Nearest" then
         if a.dist ~= b.dist then return a.dist < b.dist end
         return (a.info.rarity or 0) > (b.info.rarity or 0)
     elseif PRIORITY_MODE == "Score" then
         return scoreOf(a) > scoreOf(b)
-    else -- "Rarity"
+    else
         if a.info.rarity ~= b.info.rarity then return a.info.rarity > b.info.rarity end
         return a.dist < b.dist
     end
@@ -330,11 +325,11 @@ end)
 
 --== UI ==--
 local gui = Instance.new("ScreenGui", safeParent())
-gui.Name = "IL_AutoFarm_Pro"
+gui.Name = "IL_MeditateHunt"
 gui.ResetOnSpawn = false
 
 local frame = Instance.new("Frame", gui)
-frame.Size = UDim2.new(0, 400, 0, 190)
+frame.Size = UDim2.new(0, 400, 0, 170)
 frame.Position = UI_POS
 frame.BackgroundColor3 = Color3.fromRGB(25,25,30)
 frame.BorderSizePixel = 0
@@ -347,7 +342,7 @@ title.Size = UDim2.new(1,-20,0,20)
 title.Font = Enum.Font.GothamBold
 title.TextSize = 16
 title.TextColor3 = Color3.fromRGB(240,240,240)
-title.Text = "Rarity 3–5 Auto Farm (Resources / PRO)"
+title.Text = "Rarity 3–5 Auto (Meditate ↔ Hunt)"
 
 local status = Instance.new("TextLabel", frame)
 status.BackgroundTransparency = 1
@@ -372,7 +367,7 @@ Instance.new("UICorner", toggleBtn).CornerRadius = UDim.new(0,8)
 local tpBtn = Instance.new("TextButton", frame)
 tpBtn.Size = UDim2.new(0, 90, 0, 26)
 tpBtn.Position = UDim2.new(0,110,0,60)
-tpBtn.Text = "TP Now"
+tpBtn.Text = "TP Meditate"
 tpBtn.Font = Enum.Font.GothamSemibold
 tpBtn.TextSize = 14
 tpBtn.BackgroundColor3 = Color3.fromRGB(40,60,70)
@@ -389,30 +384,20 @@ collectBtn.BackgroundColor3 = Color3.fromRGB(70,60,40)
 collectBtn.TextColor3 = Color3.fromRGB(255,240,170)
 Instance.new("UICorner", collectBtn).CornerRadius = UDim.new(0,8)
 
-local hopBtn = Instance.new("TextButton", frame)
-hopBtn.Size = UDim2.new(0, 380, 0, 28)
-hopBtn.Position = UDim2.new(0,10,0,100)
-hopBtn.Text = "Hop (Smart)"
-hopBtn.Font = Enum.Font.GothamSemibold
-hopBtn.TextSize = 14
-hopBtn.BackgroundColor3 = Color3.fromRGB(55,40,40)
-hopBtn.TextColor3 = Color3.fromRGB(255,180,180)
-Instance.new("UICorner", hopBtn).CornerRadius = UDim.new(0,8)
-
 local footer = Instance.new("TextLabel", frame)
 footer.BackgroundTransparency = 1
-footer.Position = UDim2.new(0,10,0,134)
-footer.Size = UDim2.new(0, 200, 0, 24)
+footer.Position = UDim2.new(0,10,0,110)
+footer.Size = UDim2.new(1,-20,0,24)
 footer.Font = Enum.Font.Gotham
 footer.TextSize = 12
 footer.TextXAlignment = Enum.TextXAlignment.Left
 footer.TextColor3 = Color3.fromRGB(180,180,190)
-footer.Text = "State: Auto=ON • Hop=ON • Mode=Rarity"
+footer.Text = "State: Auto=ON • Mode=Rarity"
 
 local remainingLbl = Instance.new("TextLabel", frame)
 remainingLbl.BackgroundTransparency = 1
-remainingLbl.Position = UDim2.new(0,210,0,134)
-remainingLbl.Size = UDim2.new(0,180,0,24)
+remainingLbl.Position = UDim2.new(0,10,0,134)
+remainingLbl.Size = UDim2.new(1,-20,0,24)
 remainingLbl.Font = Enum.Font.Gotham
 remainingLbl.TextSize = 12
 remainingLbl.TextXAlignment = Enum.TextXAlignment.Right
@@ -421,7 +406,7 @@ remainingLbl.Text = "Left: -"
 
 local modeBtn = Instance.new("TextButton", frame)
 modeBtn.Size = UDim2.new(0, 120, 0, 26)
-modeBtn.Position = UDim2.new(0,10,0,160)
+modeBtn.Position = UDim2.new(0,10,0,140)
 modeBtn.Text = "Mode: Rarity"
 modeBtn.Font = Enum.Font.GothamSemibold
 modeBtn.TextSize = 14
@@ -450,7 +435,6 @@ end
 
 -- UI helpers
 local function orderedIdx() return ordered[idx] end
-
 local function updateStatus()
     refreshList()
     remainingLbl.Text = ("Left: %d"):format(#ordered)
@@ -469,15 +453,12 @@ end
 toggleBtn.MouseButton1Click:Connect(function()
     AUTO_ENABLED = not AUTO_ENABLED
     toggleBtn.Text = AUTO_ENABLED and "Pause" or "Resume"
-    footer.Text = string.format("State: Auto=%s • Hop=%s • Mode=%s", AUTO_ENABLED and "ON" or "OFF", AUTO_HOP_ENABLED and "ON" or "OFF", PRIORITY_MODE)
+    footer.Text = string.format("State: Auto=%s • Mode=%s", AUTO_ENABLED and "ON" or "OFF", PRIORITY_MODE)
 end)
 
 tpBtn.MouseButton1Click:Connect(function()
-    if #ordered == 0 then return end
-    local part = orderedIdx().part
-    if part and part.Parent then
-        tweenTP(part.Position + Vector3.new(0, SAFE_Y_OFFSET, 0))
-    end
+    tpTo(MEDITATE_POS)
+    startCultivate()
 end)
 
 collectBtn.MouseButton1Click:Connect(function()
@@ -506,35 +487,10 @@ modeBtn.MouseButton1Click:Connect(function()
     elseif PRIORITY_MODE == "Nearest" then PRIORITY_MODE = "Score"
     else PRIORITY_MODE = "Rarity" end
     modeBtn.Text = "Mode: "..PRIORITY_MODE
-    footer.Text = string.format("State: Auto=%s • Hop=%s • Mode=%s", AUTO_ENABLED and "ON" or "OFF", AUTO_HOP_ENABLED and "ON" or "OFF", PRIORITY_MODE)
+    footer.Text = string.format("State: Auto=%s • Mode=%s", AUTO_ENABLED and "ON" or "OFF", PRIORITY_MODE)
 end)
 
-hopBtn.MouseButton1Click:Connect(function()
-    -- Smart hop (ปุ่ม)
-    local function hopSmart()
-        getgenv().IL_VisitedJobs[game.JobId] = true
-        local ok, res = pcall(function()
-            return HttpService:GetAsync(("https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Asc&limit=100"):format(game.PlaceId))
-        end)
-        if ok and res then
-            local data = HttpService:JSONDecode(res)
-            if data and data.data then
-                for _, s in ipairs(data.data) do
-                    if s.playing and s.id and not getgenv().IL_VisitedJobs[s.id] and s.maxPlayers and s.playing < s.maxPlayers then
-                        getgenv().IL_VisitedJobs[s.id] = true
-                        getgenv().IL_STATS.hopped += 1
-                        TeleportService:TeleportToPlaceInstance(game.PlaceId, s.id, LP)
-                        return
-                    end
-                end
-            end
-        end
-        getgenv().IL_STATS.hopped += 1
-        TeleportService:Teleport(game.PlaceId, LP)
-    end
-    hopSmart()
-end)
-
+-- update UI periodically
 task.spawn(function()
     while true do
         task.wait(0.25)
@@ -542,6 +498,7 @@ task.spawn(function()
     end
 end)
 
+-- keep HRP on respawn
 LP.CharacterAdded:Connect(function(c)
     Char = c
     HRP = c:WaitForChild("HumanoidRootPart")
@@ -580,37 +537,6 @@ local function collectIfNear(info, range)
     return false
 end
 
---== Smart Hop (auto) ==--
-local function hopSmart()
-    getgenv().IL_VisitedJobs[game.JobId] = true
-    local ok, res = pcall(function()
-        return HttpService:GetAsync(("https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Asc&limit=100"):format(game.PlaceId))
-    end)
-    if ok and res then
-        local data = HttpService:JSONDecode(res)
-        if data and data.data then
-            for _, s in ipairs(data.data) do
-                if s.playing and s.id and not getgenv().IL_VisitedJobs[s.id] and s.maxPlayers and s.playing < s.maxPlayers then
-                    getgenv().IL_VisitedJobs[s.id] = true
-                    getgenv().IL_STATS.hopped += 1
-                    TeleportService:TeleportToPlaceInstance(game.PlaceId, s.id, LP)
-                    return
-                end
-            end
-        end
-    end
-    getgenv().IL_STATS.hopped += 1
-    TeleportService:Teleport(game.PlaceId, LP)
-end
-
-local hopCount = 0
-local function hopNow()
-    if AUTO_HOP_ENABLED and hopCount < MAX_HOP then
-        hopCount += 1
-        hopSmart()
-    end
-end
-
 --== Load-aware ==--
 local fps, alpha = 60, 0.05
 RunService.Heartbeat:Connect(function(dt)
@@ -647,52 +573,73 @@ task.spawn(function()
     end
 end)
 
---== HOTKEYS ==--
-UserInputService.InputBegan:Connect(function(input, gp)
-    if gp then return end
-    if input.KeyCode == Enum.KeyCode.P then toggleBtn:Activate() end
-    if input.KeyCode == Enum.KeyCode.H then hopBtn:Activate() end
-end)
+--== AUTO LOOP: Meditate <-> Hunt (ไม่มี hop) ==--
+local MODE = "Meditate"
+local EMPTY_GRACE = 0.5
 
---== AUTO LOOP (เก็บให้หมดก่อนฮอป + เช็ค despawn) ==--
 task.spawn(function()
     while task.wait(dynamicWait()) do
         if not AUTO_ENABLED then continue end
 
         refreshList()
-        if #ordered == 0 then
-            hopNow()
-        else
-            for i,node in ipairs(ordered) do
-                if not node or not isValidTarget(node.part, node.info) then continue end
 
-                -- ลำดับสำคัญ: Cultivate(false) -> FlyingSword(true)
-                stopCultivate()
-                task.wait(0.2)
-                useFlyingSword()
-                task.wait(0.2)
-
-                -- ไปหาเป้า
-                setWaypoint(node.part)
-                local targetPos = node.part.Position + Vector3.new(0, SAFE_Y_OFFSET, 0)
-                tweenTP(targetPos)
-
-                -- Collect (hold-aware) พร้อมกัน despawn
-                local started = os.clock()
-                while os.clock() - started < MAX_TARGET_STUCK_TIME do
-                    if not isValidTarget(node.part, node.info) then break end
-                    if collectIfNear(node.info) then
-                        getgenv().IL_STATS.collected += 1
-                        waitGoneOrTimeout(node.part, node.info, 1.5)
-                        break
-                    end
-                    task.wait(0.1)
+        if MODE == "Meditate" then
+            if #ordered == 0 then
+                local hrp = getHRP()
+                if hrp and not isNear(hrp.Position, MEDITATE_POS, 6) then
+                    tpTo(MEDITATE_POS)
                 end
+                startCultivate()
+                task.wait(EMPTY_GRACE)
+                refreshList()
+                if #ordered > 0 then
+                    MODE = "Hunt"
+                end
+            else
+                -- มีเป้าแล้ว -> ลุกขึ้นล่า
+                stopCultivate()
+                MODE = "Hunt"
             end
 
-            -- เก็บครบ “รอบนี้” แล้วถ้าไม่เหลือจริง ๆ → hop
-            refreshList()
-            if #ordered == 0 then hopNow() end
+        else -- MODE == "Hunt"
+            if #ordered == 0 then
+                -- เก็บ/หายหมด -> กลับไปนั่ง
+                tpTo(MEDITATE_POS)
+                startCultivate()
+                MODE = "Meditate"
+            else
+                for i, node in ipairs(ordered) do
+                    if not node or not isValidTarget(node.part, node.info) then continue end
+
+                    -- ลำดับบังคับ: Cultivate(false) -> FlyingSword(true)
+                    stopCultivate()
+                    task.wait(0.15)
+                    useFlyingSword()
+                    task.wait(0.15)
+
+                    -- ไปเก็บ
+                    setWaypoint(node.part)
+                    tpTo(node.part.Position)
+
+                    local t0 = os.clock()
+                    while os.clock() - t0 < MAX_TARGET_STUCK_TIME do
+                        if not isValidTarget(node.part, node.info) then break end
+                        if collectIfNear(node.info) then
+                            waitGoneOrTimeout(node.part, node.info, 1.2)
+                            break
+                        end
+                        task.wait(0.1)
+                    end
+                end
+
+                -- เช็คอีกรอบ -> ถ้าไม่เหลือค่อยกลับไปนั่ง
+                refreshList()
+                if #ordered == 0 then
+                    tpTo(MEDITATE_POS)
+                    startCultivate()
+                    MODE = "Meditate"
+                end
+            end
         end
     end
 end)
