@@ -1,7 +1,4 @@
--- IMMORTAL LUCK • RARITY 3–5 AUTO FARM (PRO)
--- Visual ESP + Waypoint + Auto TP/Collect/Hop (locked to workspace/Resources)
--- Feature pack: Smart Hop, Priority modes, Anti-Stuck, LoS, Hold-aware prompt, Load-aware loop,
--- whitelist/blacklist, remaining counter, watchdog, persistent stats, hotkeys, FlyingSword remote
+-- IMMORTAL LUCK • RARITY 3–5 AUTO FARM (PRO, Cultivate(false) -> FlyingSword(true))
 -- ใช้เพื่อทดสอบใน private server เท่านั้น
 
 --== Services ==--
@@ -19,33 +16,32 @@ local HRP = Char:WaitForChild("HumanoidRootPart")
 
 --== Config ==--
 local ROOT_NAME = "Resources"             -- ล็อกเฉพาะ workspace/Resources
-local SPEED_STUDS_PER_S = 40              -- ความเร็ว tween
+local SPEED_STUDS_PER_S = 40              -- tween speed
 local SAFE_Y_OFFSET = 2
-local MAX_SCAN_RANGE = 6000               -- ระยะมองหา
+local MAX_SCAN_RANGE = 6000               -- ระยะสแกน
 local ONLY_THESE = { [3]=true, [4]=true, [5]=true }  -- เฉพาะ 3/4/5
-local NAME_BLACKLIST = { Trap=true, Dummy=true }     -- กันของไม่ต้องการ
-local COLLECT_RANGE = 12                  -- ระยะกด ProximityPrompt
-local MAX_TARGET_STUCK_TIME = 10          -- วินาทีต่อเป้า
+local NAME_BLACKLIST = { Trap=true, Dummy=true }
+local COLLECT_RANGE = 12
+local MAX_TARGET_STUCK_TIME = 10
 local UI_POS = UDim2.new(0, 60, 0, 80)
 
 -- Auto/Hop
 local AUTO_ENABLED = true
 local AUTO_HOP_ENABLED = true
 local MAX_HOP = 50
-local EMPTY_GRACE_SECONDS = 1.0           -- เว้นเผื่อ spawn ใหม่
+local EMPTY_GRACE_SECONDS = 1.0
 
 -- Priority
 local PRIORITY_MODE = "Rarity"            -- "Rarity" | "Nearest" | "Score"
 
--- Remote usage
-local USE_FLYING_SWORD = true             -- เรียกก่อนเคลื่อนที่ไปเป้า
-local FLYING_SWORD_REMOTE = { "Remotes", "FlyingSword" }
+-- Remote usage (สำคัญ: ลำดับ Cultivate(false) -> FlyingSword(true))
+local USE_FLYING_SWORD = true
 local FLYING_SWORD_ARGS = { true }
 
--- ชื่อเรียก (ยืนยันแล้ว)
+-- ชื่อเรียก
 local RARITY_NAME = { [1]="Common", [2]="Rare", [3]="Legendary", [4]="Tier4", [5]="Tier5" }
 
---== Globals / Persist ==--
+--== Persist ==--
 getgenv().IL_STATS = getgenv().IL_STATS or {collected=0, hopped=0}
 getgenv().IL_VisitedJobs = getgenv().IL_VisitedJobs or {}
 
@@ -71,12 +67,12 @@ end
 local function getHRP()
     if HRP and HRP.Parent then return HRP end
     if LP.Character then
-        HRP = LP.Character:FindChild("HumanoidRootPart") or LP.Character:FindFirstChild("HumanoidRootPart") or LP.Character:WaitForChild("HumanoidRootPart", 5)
+        HRP = LP.Character:FindFirstChild("HumanoidRootPart") or LP.Character:WaitForChild("HumanoidRootPart", 5)
     end
     return HRP
 end
 
--- LoS check (anti-stuck)
+-- LoS check (กันติดสิ่งกีดขวาง)
 local function hasLineOfSight(fromPos, toPos)
     local params = RaycastParams.new()
     params.FilterType = Enum.RaycastFilterType.Blacklist
@@ -86,7 +82,7 @@ local function hasLineOfSight(fromPos, toPos)
     return result == nil
 end
 
---== Waypoint (Beam) ==--
+--== Waypoint ==--
 local function clearWaypoint()
     local old = workspace:FindFirstChild("IL_Waypoint_Att0")
     if old then old:Destroy() end
@@ -106,7 +102,7 @@ local function setWaypoint(targetPart)
     beam.Parent = a
 end
 
---== Tween TP (with anti-stuck & snap) ==--
+--== TP (tween + snap fail-safe) ==--
 local currentTween
 local function snapTP(targetPos)
     local _hrp = getHRP()
@@ -139,7 +135,7 @@ local function tweenTP(targetPos)
     local _hrp = getHRP(); if not _hrp then return end
     local start = _hrp.Position
     if not hasLineOfSight(start, targetPos) then
-        targetPos = targetPos + Vector3.new(0, 20, 0) -- ยกหัวหลบสิ่งกีดขวาง
+        targetPos = targetPos + Vector3.new(0, 20, 0)
     end
     local dist = (targetPos - start).Magnitude
     local step = 20
@@ -153,18 +149,23 @@ local function tweenTP(targetPos)
     end
 end
 
---== Remote: Flying Sword ==--
+--== Remotes (สำคัญ) ==--
+local function stopCultivate()
+    local rem = RS:WaitForChild("Remotes")
+    local ev = rem:WaitForChild("Cultivate")
+    local args = { false }
+    pcall(function() ev:FireServer(unpack(args)) end)
+end
+
 local function useFlyingSword()
     if not USE_FLYING_SWORD then return end
-    local ok, _ = pcall(function()
-        local rem = RS:WaitForChild(FLYING_SWORD_REMOTE[1])
-        local ev = rem:WaitForChild(FLYING_SWORD_REMOTE[2])
-        ev:FireServer(unpack(FLYING_SWORD_ARGS))
-    end)
+    local rem = RS:WaitForChild("Remotes")
+    local ev = rem:WaitForChild("FlyingSword")
+    pcall(function() ev:FireServer(unpack(FLYING_SWORD_ARGS)) end)
 end
 
 --== Scan Root ==--
-local ROOT = workspace:WaitForChild(ROOT_NAME) -- ล็อก scan เฉพาะ Resources
+local ROOT = workspace:WaitForChild(ROOT_NAME)
 
 --== Targets + ESP ==--
 local targets = {}  -- [part] = {obj=Instance, rarity=number, bb=Billboard, hl=Highlight, lbl=TextLabel}
@@ -229,17 +230,14 @@ local function attach(inst)
     end)
 end
 
--- สแกนครั้งแรกเฉพาะใน ROOT (Resources)
 for _,d in ipairs(ROOT:GetDescendants()) do
     if d:GetAttribute("Rarity") ~= nil then attach(d) end
 end
 
--- ฟังเฉพาะที่ ROOT
 ROOT.DescendantAdded:Connect(function(d)
     if d:GetAttribute("Rarity") ~= nil then attach(d) end
 end)
 
--- ถ้า Resources ถูก recreate (แมพรีโหลด) ให้ rebind ใหม่
 workspace.ChildAdded:Connect(function(c)
     if c.Name == ROOT_NAME then
         ROOT = c
@@ -260,10 +258,7 @@ end)
 --== Ordering / Priority ==--
 local ordered, idx = {}, 1
 
-local function scoreOf(node)
-    -- คะแนนผสม: rarity*1000 - dist
-    return (node.info.rarity or 0)*1000 - (node.dist or 0)
-end
+local function scoreOf(node) return (node.info.rarity or 0)*1000 - (node.dist or 0) end
 
 local function sortNodes(a,b)
     if PRIORITY_MODE == "Nearest" then
@@ -292,7 +287,6 @@ local function refreshList()
     if #ordered == 0 then idx = 1 else idx = math.clamp(idx, 1, #ordered) end
 end
 
--- Validity + wait-gone
 local function isValidTarget(part, info)
     if not part or not part.Parent then return false end
     if not info or not info.obj or not info.obj.Parent then return false end
@@ -313,7 +307,7 @@ local function waitGoneOrTimeout(part, info, timeout)
     return false
 end
 
---== Visual updater (ESP text & visible) ==--
+--== Visual updater ==--
 task.spawn(function()
     while true do
         task.wait(0.2)
@@ -495,11 +489,9 @@ collectBtn.MouseButton1Click:Connect(function()
     local hrp = getHRP()
     local p = getPart(info.obj)
     if prompt and hrp and p and (hrp.Position - p.Position).Magnitude <= COLLECT_RANGE then
-        -- Hold-aware
         if typeof(fireproximityprompt) == "function" then
             local hd = prompt.HoldDuration or 0
-            if hd <= 0 then
-                pcall(function() fireproximityprompt(prompt) end)
+            if hd <= 0 then pcall(function() fireproximityprompt(prompt) end)
             else
                 local t0 = os.clock()
                 pcall(function() fireproximityprompt(prompt, 1) end)
@@ -509,7 +501,6 @@ collectBtn.MouseButton1Click:Connect(function()
     end
 end)
 
--- Priority switch
 modeBtn.MouseButton1Click:Connect(function()
     if PRIORITY_MODE == "Rarity" then PRIORITY_MODE = "Nearest"
     elseif PRIORITY_MODE == "Nearest" then PRIORITY_MODE = "Score"
@@ -518,8 +509,8 @@ modeBtn.MouseButton1Click:Connect(function()
     footer.Text = string.format("State: Auto=%s • Hop=%s • Mode=%s", AUTO_ENABLED and "ON" or "OFF", AUTO_HOP_ENABLED and "ON" or "OFF", PRIORITY_MODE)
 end)
 
--- Smart hop button
 hopBtn.MouseButton1Click:Connect(function()
+    -- Smart hop (ปุ่ม)
     local function hopSmart()
         getgenv().IL_VisitedJobs[game.JobId] = true
         local ok, res = pcall(function()
@@ -538,14 +529,12 @@ hopBtn.MouseButton1Click:Connect(function()
                 end
             end
         end
-        -- fallback
         getgenv().IL_STATS.hopped += 1
         TeleportService:Teleport(game.PlaceId, LP)
     end
     hopSmart()
 end)
 
--- update UI periodically
 task.spawn(function()
     while true do
         task.wait(0.25)
@@ -553,13 +542,16 @@ task.spawn(function()
     end
 end)
 
--- keep HRP on respawn
 LP.CharacterAdded:Connect(function(c)
     Char = c
     HRP = c:WaitForChild("HumanoidRootPart")
+    task.delay(0.5, function()
+        -- กันตอนเข้ามาใหม่แล้วยังคัลติอยู่
+        stopCultivate()
+    end)
 end)
 
---== Prompt helper (hold-aware) ==--
+--== Prompt helpers ==--
 local function pressPrompt(prompt)
     if not prompt then return false end
     if typeof(fireproximityprompt) ~= "function" then return false end
@@ -588,7 +580,7 @@ local function collectIfNear(info, range)
     return false
 end
 
---== Smart Hop (function for auto) ==--
+--== Smart Hop (auto) ==--
 local function hopSmart()
     getgenv().IL_VisitedJobs[game.JobId] = true
     local ok, res = pcall(function()
@@ -607,7 +599,6 @@ local function hopSmart()
             end
         end
     end
-    -- fallback
     getgenv().IL_STATS.hopped += 1
     TeleportService:Teleport(game.PlaceId, LP)
 end
@@ -620,7 +611,7 @@ local function hopNow()
     end
 end
 
---== Load-aware FPS smoothing ==--
+--== Load-aware ==--
 local fps, alpha = 60, 0.05
 RunService.Heartbeat:Connect(function(dt)
     local nowFps = 1/dt
@@ -633,7 +624,7 @@ local function dynamicWait()
     else return 0.30 end
 end
 
---== Anti-freeze watchdog (movement) ==--
+--== Anti-freeze watchdog ==--
 local lastPos = nil
 local lastMove = os.clock()
 RunService.Heartbeat:Connect(function()
@@ -663,68 +654,45 @@ UserInputService.InputBegan:Connect(function(input, gp)
     if input.KeyCode == Enum.KeyCode.H then hopBtn:Activate() end
 end)
 
---== AUTO LOOP: เก็บให้หมดก่อนค่อย hop + เช็ค despawn ==--
+--== AUTO LOOP (เก็บให้หมดก่อนฮอป + เช็ค despawn) ==--
 task.spawn(function()
     while task.wait(dynamicWait()) do
         if not AUTO_ENABLED then continue end
 
         refreshList()
         if #ordered == 0 then
-            -- เฝ้าดูสั้น ๆ เผื่อ spawn ใหม่
-            local t0 = os.clock()
-            local found = false
-            repeat
-                task.wait(0.1)
-                refreshList()
-                if #ordered > 0 then found = true break end
-            until os.clock() - t0 >= EMPTY_GRACE_SECONDS
-
-            if not found then
-                hopNow()
-            end
+            hopNow()
         else
-            -- วนเก็บทุกเป้าในรอบนี้
-            local i = 1
-            while i <= #ordered do
-                local node = ordered[i]
-                if not node or not isValidTarget(node.part, node.info) then
-                    i += 1
-                    continue
-                end
+            for i,node in ipairs(ordered) do
+                if not node or not isValidTarget(node.part, node.info) then continue end
 
-                -- Flying sword ก่อนเคลื่อนที่
+                -- ลำดับสำคัญ: Cultivate(false) -> FlyingSword(true)
+                stopCultivate()
+                task.wait(0.2)
                 useFlyingSword()
+                task.wait(0.2)
 
-                -- ตั้ง waypoint และไปหาเป้า
+                -- ไปหาเป้า
                 setWaypoint(node.part)
                 local targetPos = node.part.Position + Vector3.new(0, SAFE_Y_OFFSET, 0)
                 tweenTP(targetPos)
 
-                -- พยายาม collect ภายในเวลาที่กำหนด
+                -- Collect (hold-aware) พร้อมกัน despawn
                 local started = os.clock()
                 while os.clock() - started < MAX_TARGET_STUCK_TIME do
                     if not isValidTarget(node.part, node.info) then break end
                     if collectIfNear(node.info) then
                         getgenv().IL_STATS.collected += 1
-                        -- รอให้มันหายจาก Resources/targets
-                        waitGoneOrTimeout(node.part, node.info, 2.0)
+                        waitGoneOrTimeout(node.part, node.info, 1.5)
                         break
                     end
                     task.wait(0.1)
                 end
-
-                -- ไปเป้าถัดไป (ถ้าหายเองกลางคันก็ข้าม)
-                i += 1
-                refreshList()
             end
 
-            -- เก็บครบ “รอบนี้” แล้ว → เช็คอีกครั้ง ไม่มีจริง ๆ → hop
+            -- เก็บครบ “รอบนี้” แล้วถ้าไม่เหลือจริง ๆ → hop
             refreshList()
-            if #ordered == 0 then
-                hopNow()
-            end
+            if #ordered == 0 then hopNow() end
         end
     end
 end)
-
---== END ==
