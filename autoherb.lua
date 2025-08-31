@@ -1,4 +1,4 @@
--- IMMORTAL LUCK • RARITY 3–5 AUTO FARM (PRO, Cultivate(false) -> FlyingSword(true))
+-- IMMORTAL LUCK • RARITY 3–5 AUTO FARM (PRO, Cultivate(false) -> FlyingSword(true), Rejoin VIP Same Server)
 -- ใช้เพื่อทดสอบใน private server เท่านั้น
 
 --== Services ==--
@@ -8,7 +8,6 @@ local TeleportService = game:GetService("TeleportService")
 local UserInputService = game:GetService("UserInputService")
 local RS = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
-local HttpService = game:GetService("HttpService")
 
 local LP = Players.LocalPlayer
 local Char = LP.Character or LP.CharacterAdded:Wait()
@@ -43,7 +42,6 @@ local RARITY_NAME = { [1]="Common", [2]="Rare", [3]="Legendary", [4]="Tier4", [5
 
 --== Persist ==--
 getgenv().IL_STATS = getgenv().IL_STATS or {collected=0, hopped=0}
-getgenv().IL_VisitedJobs = getgenv().IL_VisitedJobs or {}
 
 --== Helpers ==--
 local function safeParent()
@@ -161,7 +159,7 @@ local function useFlyingSword()
     if not USE_FLYING_SWORD then return end
     local rem = RS:WaitForChild("Remotes")
     local ev = rem:WaitForChild("FlyingSword")
-    pcall(function() ev:FireServer(unpack(FLYING_SWORD_ARGS)) end)
+    pcall(function() ev:FireServer(unpack( { true } )) end)
 end
 
 --== Scan Root ==--
@@ -240,20 +238,24 @@ end)
 
 workspace.ChildAdded:Connect(function(c)
     if c.Name == ROOT_NAME then
-        ROOT = c
+        -- ROOT ถูก recreate
+        -- ล้างของเก่า
         for part, rec in pairs(targets) do
             pcall(function() if rec.bb then rec.bb:Destroy() end end)
             pcall(function() if rec.hl then rec.hl:Destroy() end end)
             targets[part] = nil
         end
-        for _,d in ipairs(ROOT:GetDescendants()) do
+        -- bind ใหม่
+        for _,d in ipairs(c:GetDescendants()) do
             if d:GetAttribute("Rarity") ~= nil then attach(d) end
         end
-        ROOT.DescendantAdded:Connect(function(d)
+        c.DescendantAdded:Connect(function(d)
             if d:GetAttribute("Rarity") ~= nil then attach(d) end
         end)
+        _G.__IL_ROOT = c
     end
 end)
+_G.__IL_ROOT = ROOT
 
 --== Ordering / Priority ==--
 local ordered, idx = {}, 1
@@ -276,7 +278,7 @@ local function refreshList()
     ordered = {}
     local _hrp = getHRP(); if not _hrp then return end
     for part,info in pairs(targets) do
-        if part and part.Parent and info and info.obj and info.obj.Parent and info.obj:IsDescendantOf(ROOT) then
+        if part and part.Parent and info and info.obj and info.obj.Parent and info.obj:IsDescendantOf(_G.__IL_ROOT) then
             local dist = distance(_hrp.Position, part.Position)
             if dist <= MAX_SCAN_RANGE then
                 table.insert(ordered, {part=part, info=info, dist=dist})
@@ -290,7 +292,7 @@ end
 local function isValidTarget(part, info)
     if not part or not part.Parent then return false end
     if not info or not info.obj or not info.obj.Parent then return false end
-    if not info.obj:IsDescendantOf(ROOT) then return false end
+    if not info.obj:IsDescendantOf(_G.__IL_ROOT) then return false end
     local r = info.obj:GetAttribute("Rarity")
     if not ONLY_THESE[r] then return false end
     return true
@@ -392,7 +394,7 @@ Instance.new("UICorner", collectBtn).CornerRadius = UDim.new(0,8)
 local hopBtn = Instance.new("TextButton", frame)
 hopBtn.Size = UDim2.new(0, 380, 0, 28)
 hopBtn.Position = UDim2.new(0,10,0,100)
-hopBtn.Text = "Hop (Smart)"
+hopBtn.Text = "Rejoin VIP (Same Server)"
 hopBtn.Font = Enum.Font.GothamSemibold
 hopBtn.TextSize = 14
 hopBtn.BackgroundColor3 = Color3.fromRGB(55,40,40)
@@ -509,30 +511,20 @@ modeBtn.MouseButton1Click:Connect(function()
     footer.Text = string.format("State: Auto=%s • Hop=%s • Mode=%s", AUTO_ENABLED and "ON" or "OFF", AUTO_HOP_ENABLED and "ON" or "OFF", PRIORITY_MODE)
 end)
 
-hopBtn.MouseButton1Click:Connect(function()
-    -- Smart hop (ปุ่ม)
-    local function hopSmart()
-        getgenv().IL_VisitedJobs[game.JobId] = true
-        local ok, res = pcall(function()
-            return HttpService:GetAsync(("https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Asc&limit=100"):format(game.PlaceId))
-        end)
-        if ok and res then
-            local data = HttpService:JSONDecode(res)
-            if data and data.data then
-                for _, s in ipairs(data.data) do
-                    if s.playing and s.id and not getgenv().IL_VisitedJobs[s.id] and s.maxPlayers and s.playing < s.maxPlayers then
-                        getgenv().IL_VisitedJobs[s.id] = true
-                        getgenv().IL_STATS.hopped += 1
-                        TeleportService:TeleportToPlaceInstance(game.PlaceId, s.id, LP)
-                        return
-                    end
-                end
-            end
-        end
-        getgenv().IL_STATS.hopped += 1
+-- Rejoin VIP ปุ่ม
+local function rejoinSameServer()
+    local ok, err = pcall(function()
+        TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, LP)
+    end)
+    if not ok then
+        warn("Rejoin same server failed:", err)
         TeleportService:Teleport(game.PlaceId, LP)
     end
-    hopSmart()
+end
+
+hopBtn.MouseButton1Click:Connect(function()
+    getgenv().IL_STATS.hopped += 1
+    rejoinSameServer()
 end)
 
 task.spawn(function()
@@ -580,34 +572,13 @@ local function collectIfNear(info, range)
     return false
 end
 
---== Smart Hop (auto) ==--
-local function hopSmart()
-    getgenv().IL_VisitedJobs[game.JobId] = true
-    local ok, res = pcall(function()
-        return HttpService:GetAsync(("https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Asc&limit=100"):format(game.PlaceId))
-    end)
-    if ok and res then
-        local data = HttpService:JSONDecode(res)
-        if data and data.data then
-            for _, s in ipairs(data.data) do
-                if s.playing and s.id and not getgenv().IL_VisitedJobs[s.id] and s.maxPlayers and s.playing < s.maxPlayers then
-                    getgenv().IL_VisitedJobs[s.id] = true
-                    getgenv().IL_STATS.hopped += 1
-                    TeleportService:TeleportToPlaceInstance(game.PlaceId, s.id, LP)
-                    return
-                end
-            end
-        end
-    end
-    getgenv().IL_STATS.hopped += 1
-    TeleportService:Teleport(game.PlaceId, LP)
-end
-
+--== Hop control (Rejoin VIP เดิมเสมอ) ==--
 local hopCount = 0
 local function hopNow()
     if AUTO_HOP_ENABLED and hopCount < MAX_HOP then
         hopCount += 1
-        hopSmart()
+        getgenv().IL_STATS.hopped += 1
+        rejoinSameServer()
     end
 end
 
