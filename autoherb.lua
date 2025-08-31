@@ -161,6 +161,12 @@ local function useFlyingSword()
     pcall(function() ev:FireServer(true) end)
 end
 
+local function stopFlyingSword()
+    local rem = RS:WaitForChild("Remotes")
+    local ev  = rem:WaitForChild("FlyingSword")
+    pcall(function() ev:FireServer(false) end)
+end
+
 --== Scan Root ==--
 local ROOT = workspace:WaitForChild(ROOT_NAME)
 
@@ -237,18 +243,19 @@ end)
 
 workspace.ChildAdded:Connect(function(c)
     if c.Name == ROOT_NAME then
-        ROOT = c
+        -- ROOT recreate
         for part, rec in pairs(targets) do
             pcall(function() if rec.bb then rec.bb:Destroy() end end)
             pcall(function() if rec.hl then rec.hl:Destroy() end end)
             targets[part] = nil
         end
-        for _,d in ipairs(ROOT:GetDescendants()) do
+        for _,d in ipairs(c:GetDescendants()) do
             if d:GetAttribute("Rarity") ~= nil then attach(d) end
         end
-        ROOT.DescendantAdded:Connect(function(d)
+        c.DescendantAdded:Connect(function(d)
             if d:GetAttribute("Rarity") ~= nil then attach(d) end
         end)
+        ROOT = c
     end
 end)
 
@@ -365,9 +372,9 @@ toggleBtn.TextColor3 = Color3.fromRGB(220,220,255)
 Instance.new("UICorner", toggleBtn).CornerRadius = UDim.new(0,8)
 
 local tpBtn = Instance.new("TextButton", frame)
-tpBtn.Size = UDim2.new(0, 90, 0, 26)
+tpBtn.Size = UDim2.new(0, 110, 0, 26)
 tpBtn.Position = UDim2.new(0,110,0,60)
-tpBtn.Text = "TP Meditate"
+tpBtn.Text = "TP & Meditate"
 tpBtn.Font = Enum.Font.GothamSemibold
 tpBtn.TextSize = 14
 tpBtn.BackgroundColor3 = Color3.fromRGB(40,60,70)
@@ -376,7 +383,7 @@ Instance.new("UICorner", tpBtn).CornerRadius = UDim.new(0,8)
 
 local collectBtn = Instance.new("TextButton", frame)
 collectBtn.Size = UDim2.new(0, 110, 0, 26)
-collectBtn.Position = UDim2.new(0,210,0,60)
+collectBtn.Position = UDim2.new(0,230,0,60)
 collectBtn.Text = "Collect Now"
 collectBtn.Font = Enum.Font.GothamSemibold
 collectBtn.TextSize = 14
@@ -457,8 +464,10 @@ toggleBtn.MouseButton1Click:Connect(function()
 end)
 
 tpBtn.MouseButton1Click:Connect(function()
-    tpTo(MEDITATE_POS)
-    startCultivate()
+    stopFlyingSword()         -- ปิดดาบก่อน
+    tpTo(MEDITATE_POS)        -- TP กลับจุดนั่ง
+    task.wait(0.05)
+    startCultivate()          -- นั่งสมาธิ
 end)
 
 collectBtn.MouseButton1Click:Connect(function()
@@ -603,8 +612,10 @@ task.spawn(function()
 
         else -- MODE == "Hunt"
             if #ordered == 0 then
-                -- เก็บ/หายหมด -> กลับไปนั่ง
+                -- เก็บ/หายหมด -> ปิดดาบก่อน แล้วกลับไปนั่ง
+                stopFlyingSword()
                 tpTo(MEDITATE_POS)
+                task.wait(0.05)
                 startCultivate()
                 MODE = "Meditate"
             else
@@ -632,10 +643,12 @@ task.spawn(function()
                     end
                 end
 
-                -- เช็คอีกรอบ -> ถ้าไม่เหลือค่อยกลับไปนั่ง
+                -- เช็คอีกรอบ -> ถ้าไม่เหลือค่อยกลับไปนั่ง (ปิดดาบก่อน)
                 refreshList()
                 if #ordered == 0 then
+                    stopFlyingSword()
                     tpTo(MEDITATE_POS)
+                    task.wait(0.05)
                     startCultivate()
                     MODE = "Meditate"
                 end
