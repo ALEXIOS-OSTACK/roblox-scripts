@@ -13,7 +13,7 @@ local HRP = Char:WaitForChild("HumanoidRootPart")
 
 --== Config (Fast TP tuned + Options) ==--
 local ROOT_NAME            = "Resources"   -- สแกนเฉพาะ workspace/Resources
-local SPEED_STUDS_PER_S    = 220           -- ความเร็ว tween (เดิม 40)
+local SPEED_STUDS_PER_S    = 150           -- ความเร็ว tween (เดิม 40)
 local MIN_TWEEN_TIME       = 0.08          -- ขั้นต่ำเวลาต่อช็อต (เดิม 0.25)
 local TP_STEP_STUDS        = 120           -- ความยาวก้าวในการ TP (เดิม 20)
 local HEIGHT_BOOST         = 30            -- ยกหัวหลบสิ่งกีดขวางเมื่อไม่มี LoS
