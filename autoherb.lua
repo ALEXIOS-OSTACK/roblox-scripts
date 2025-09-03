@@ -1,46 +1,48 @@
--- IMMORTAL LUCK • RARITY 3–5 AUTO (Meditate <-> Hunt, no hop) • Fast TP + Ram-Into + Remote Collect
+-- IMMORTAL LUCK • RARITY 3–5 AUTO (Meditate <-> Hunt, no hop)
+-- Fast TP + Ram-Into + Remote Collect • ไม่เด้ง/ไม่ตกอากาศ (แพตช์นิ่ง)
 -- ใช้เพื่อทดสอบใน private server เท่านั้น
 
 --== Services ==--
-local Players = game:GetService("Players")
-local TweenService = game:GetService("TweenService")
-local UserInputService = game:GetService("UserInputService")
-local RS = game:GetService("ReplicatedStorage")
-local RunService = game:GetService("RunService")
-local LP = Players.LocalPlayer
-local Char = LP.Character or LP.CharacterAdded:Wait()
-local HRP = Char:WaitForChild("HumanoidRootPart")
+local Players            = game:GetService("Players")
+local TweenService       = game:GetService("TweenService")
+local UserInputService   = game:GetService("UserInputService")
+local RS                 = game:GetService("ReplicatedStorage")
+local RunService         = game:GetService("RunService")
+local LP                 = Players.LocalPlayer
+local Char               = LP.Character or LP.CharacterAdded:Wait()
+local HRP                = Char:WaitForChild("HumanoidRootPart")
 
 --== Config (Fast TP tuned + Options) ==--
-local ROOT_NAME            = "Resources"   -- สแกนเฉพาะ workspace/Resources
-local SPEED_STUDS_PER_S    = 150           -- ความเร็ว tween (เดิม 40)
-local MIN_TWEEN_TIME       = 0.08          -- ขั้นต่ำเวลาต่อช็อต (เดิม 0.25)
-local TP_STEP_STUDS        = 120           -- ความยาวก้าวในการ TP (เดิม 20)
-local HEIGHT_BOOST         = 30            -- ยกหัวหลบสิ่งกีดขวางเมื่อไม่มี LoS
-local SAFE_Y_OFFSET        = 2
-local MAX_SCAN_RANGE       = 6000
-local ONLY_THESE           = { [3]=true, [4]=true, [5]=true }  -- เฉพาะ R3/4/5
-local NAME_BLACKLIST       = { Trap=true, Dummy=true }         -- กันของไม่ต้องการ
-local COLLECT_RANGE        = 14            -- เผื่อระยะเก็บนิดหน่อย
-local MAX_TARGET_STUCK_TIME= 10
-local UI_POS               = UDim2.new(0, 60, 0, 80)
-local PRIORITY_MODE        = "Rarity"      -- "Rarity" | "Nearest" | "Score"
-local AUTO_ENABLED         = true
-local MEDITATE_POS         = Vector3.new(-519.435, -5.452, -386.665)
+local ROOT_NAME              = "Resources"  -- สแกนเฉพาะ workspace/Resources
+local SPEED_STUDS_PER_S      = 150          -- ความเร็ว tween (เดิม 40)
+local MIN_TWEEN_TIME         = 0.08         -- ขั้นต่ำเวลาต่อช็อต (เดิม 0.25)
+local TP_STEP_STUDS          = 90           -- ความยาวก้าวในการ TP (เดิม 120 → 90 ลื่นกว่า)
+local SAFE_Y_OFFSET          = 1.5          -- เฉพาะระหว่างทาง (ไม่บวกสเต็ปสุดท้าย)
+local HEIGHT_BOOST           = 12           -- ยกหัวเมื่อไม่มี LoS (เดิม 30)
+local MAX_DROP_PER_HOP       = 10           -- จำกัดการ “ตก” ต่อฮอพ
+local MAX_SCAN_RANGE         = 6000
+local ONLY_THESE             = { [3]=true, [4]=true, [5]=true }   -- เฉพาะ R3/4/5
+local NAME_BLACKLIST         = { Trap=true, Dummy=true }
+local COLLECT_RANGE          = 14
+local MAX_TARGET_STUCK_TIME  = 8
+local UI_POS                 = UDim2.new(0, 60, 0, 80)
+local PRIORITY_MODE          = "Rarity"     -- "Rarity" | "Nearest" | "Score"
+local AUTO_ENABLED           = true
+local MEDITATE_POS           = Vector3.new(-519.435, -5.452, -386.665)
 
 -- == Approach Assist ==
-local COLLECT_WITH_SWORD   = false         -- false = ปิดดาบก่อนเก็บเพื่อให้ Prompt ติดง่ายขึ้น
-local APPROACH_RINGS       = {6, 9, 12, 16}
-local APPROACH_STEP_DEG    = 30
-local DROP_HEIGHT          = 18
+local COLLECT_WITH_SWORD     = false        -- false = ปิดดาบก่อนเก็บ
+local APPROACH_RINGS         = {6, 9, 12, 16}
+local APPROACH_STEP_DEG      = 30
+local DROP_HEIGHT            = 18
 
 -- == Ram-into target ==
-local RAM_INTO_ENABLED     = true          -- เปิดโหมดชน
-local RAM_OVERSHOOT        = 8             -- พุ่งเลยเป้าไปกี่ studs แล้วค่อยวกกลับ
-local USE_NOCLIP_FOR_RAM   = true          -- เปิด noclip ชั่วคราวตอนชน
+local RAM_INTO_ENABLED       = true
+local RAM_OVERSHOOT          = 8
+local USE_NOCLIP_FOR_RAM     = true
 
 -- == Remote Collect ==
-local USE_REMOTE_COLLECT   = true          -- ยิง Remotes.Collect ก่อนเสมอ
+local USE_REMOTE_COLLECT     = true
 
 --== Labels ==--
 local RARITY_NAME = { [1]="Common", [2]="Rare", [3]="Legendary", [4]="Tier4", [5]="Tier5" }
@@ -74,6 +76,13 @@ end
 
 local function isNear(pos, target, r) return (pos - target).Magnitude <= (r or 4) end
 
+-- ฟิสิกส์: ตัดโมเมนตัม
+local function zeroVel(hrp)
+    if not hrp then return end
+    hrp.AssemblyLinearVelocity = Vector3.zero
+    hrp.AssemblyAngularVelocity = Vector3.zero
+end
+
 -- noclip ชั่วคราว (สำหรับ Ram-Into)
 local __origCollide = nil
 local function setCharacterNoClip(on)
@@ -105,6 +114,28 @@ local function hasLineOfSight(fromPos, toPos)
     return result == nil
 end
 
+--== Ground Snap ==--
+local lastGroundY = nil
+local function snapToFloor(pos, up, down)
+    up, down = up or 60, down or 300
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Blacklist
+    params.FilterDescendantsInstances = {LP.Character}
+    local res = workspace:Raycast(pos + Vector3.new(0, up, 0), Vector3.new(0, -up - down, 0), params)
+    if res then
+        lastGroundY = res.Position.Y + 0.10
+        return Vector3.new(pos.X, lastGroundY, pos.Z)
+    end
+    return pos
+end
+local function snapToFloorOrLast(pos)
+    local snapped = snapToFloor(pos)
+    if snapped == pos and lastGroundY then
+        return Vector3.new(pos.X, lastGroundY, pos.Z)
+    end
+    return snapped
+end
+
 --== Waypoint ==--
 local function clearWaypoint()
     local old = workspace:FindFirstChild("IL_Waypoint_Att0")
@@ -119,8 +150,7 @@ local function setWaypoint(targetPart)
     local b = Instance.new("Attachment"); b.Parent = targetPart
     local beam = Instance.new("Beam")
     beam.Attachment0, beam.Attachment1 = a, b
-    beam.FaceCamera = true
-    beam.Segments = 50
+    beam.FaceCamera = true; beam.Segments = 50
     beam.Width0, beam.Width1 = 0.35, 0.35
     beam.Parent = a
 end
@@ -129,9 +159,9 @@ end
 local currentTween
 
 local function tweenHop(toPos)
-    local _hrp = getHRP()
-    if not _hrp then return end
-    local dist = (_hrp.Position - toPos).Magnitude
+    local _hrp = getHRP(); if not _hrp then return end
+    local start = _hrp.Position
+    local dist = (start - toPos).Magnitude
     local t = math.max(MIN_TWEEN_TIME, dist / SPEED_STUDS_PER_S)
     if currentTween and currentTween.PlaybackState == Enum.PlaybackState.Playing then
         currentTween:Cancel()
@@ -144,34 +174,71 @@ local function tweenHop(toPos)
         elapsed += dt
         if elapsed > t + 2 then
             currentTween:Cancel()
-            _hrp.CFrame = CFrame.new(toPos + Vector3.new(0, SAFE_Y_OFFSET, 0))
+            _hrp.CFrame = CFrame.new(toPos) -- ไม่บวก SAFE_Y ที่ฮอพสุดท้าย
             break
         end
     end
+    zeroVel(_hrp)
 end
 
+-- ยกหัวเฉพาะจำเป็น (adaptive)
+local function liftIfNeeded(fromPos, toPos)
+    if hasLineOfSight(fromPos, toPos) then
+        return toPos
+    end
+    return toPos + Vector3.new(0, math.min(SAFE_Y_OFFSET, 3), 0)
+end
+
+-- ลูป TP แบบแบ่งฮอพ + จำกัดการตกต่อฮอพ + สเต็ปสุดท้ายติดพื้น
 local function tweenTP(targetPos)
     local _hrp = getHRP(); if not _hrp then return end
     local start = _hrp.Position
+
+    -- ถ้า LoS ต้น→ปลายไม่ผ่าน ให้ยกหัวรวมเล็กน้อย
     if not hasLineOfSight(start, targetPos) then
         targetPos = targetPos + Vector3.new(0, HEIGHT_BOOST, 0)
     end
+
     local dist  = (targetPos - start).Magnitude
-    local step  = TP_STEP_STUDS
-    local steps = math.max(1, math.ceil(dist / step))
+    local steps = math.max(1, math.ceil(dist / TP_STEP_STUDS))
+    local prevY = start.Y
+
     for i = 1, steps do
-        local p = start:Lerp(targetPos, i/steps)
-        p = Vector3.new(p.X, p.Y + SAFE_Y_OFFSET, p.Z)
+        local raw = start:Lerp(targetPos, i/steps)
+        local p = raw
+        if i < steps then
+            p = liftIfNeeded(Vector3.new(start.X, prevY, start.Z), p)
+            p = Vector3.new(p.X, p.Y + SAFE_Y_OFFSET, p.Z) -- เฉพาะระหว่างทาง
+        else
+            p = snapToFloorOrLast(p) -- สเต็ปสุดท้ายติดพื้น
+        end
+
+        -- จำกัดการตกฮอพละไม่เกิน MAX_DROP_PER_HOP
+        local dy = p.Y - prevY
+        if dy < -MAX_DROP_PER_HOP then
+            local mid = Vector3.new(p.X, prevY - MAX_DROP_PER_HOP, p.Z)
+            tweenHop(mid)
+            prevY = mid.Y
+        end
         tweenHop(p)
-        -- เร็วขึ้น: ไม่ต้องหน่วง
+        prevY = p.Y
     end
 end
 
-local function tpTo(vec3)
-    tweenTP(vec3 + Vector3.new(0, SAFE_Y_OFFSET, 0))
+-- ป้องกันเรียก TP ซ้ำจุดเดิม
+local lastTP
+local function tpToSmart(vec3)
+    local h = getHRP(); if not h then return end
+    if lastTP and (lastTP - vec3).Magnitude < 1.0 then return end
+    tweenTP(vec3)
+    lastTP = vec3
 end
 
---== Remotes: Cultivate/FlyingSword (มี debounce กันสแปม) ==--
+local function tpTo(vec3)  -- ไม่บวก SAFE_Y ที่นี่
+    tpToSmart(vec3)
+end
+
+--== Remotes: Cultivate/FlyingSword (มี debounce) ==--
 local CUL_MIN_INTERVAL = 1.2
 local CultivateState = { on = false, lastSend = 0 }
 local function setCultivate(desired)
@@ -208,8 +275,7 @@ end
 local function _findCollectIdFromInst(inst)
     if not inst or not inst.Parent then return nil end
     local keys = {
-        "CollectId","HerbId","ResourceId","ObjectId","Id","ID",
-        "Guid","GUID","UUID","Uid","uid","HerbUUID","RootId"
+        "CollectId","HerbId","ResourceId","ObjectId","Id","ID","Guid","GUID","UUID","Uid","uid","HerbUUID","RootId"
     }
     for _,k in ipairs(keys) do
         local v = inst:GetAttribute(k)
@@ -430,7 +496,8 @@ local function approachTarget(part)
 
     -- สุดท้าย: snap ใกล้เป้า
     local _hrp = getHRP()
-    if _hrp then _hrp.CFrame = CFrame.new(tpos + Vector3.new(0, SAFE_Y_OFFSET + 1.5, 0)) end
+    if _hrp then _hrp.CFrame = CFrame.new(snapToFloorOrLast(tpos)) end
+    zeroVel(_hrp)
     return closeEnough(getHRP().Position, tpos)
 end
 
@@ -443,26 +510,28 @@ local function ramInto(part)
     if dir.Magnitude < 1e-3 then dir = Vector3.new(0,1,0) else dir = dir.Unit end
 
     if USE_NOCLIP_FOR_RAM then setCharacterNoClip(true) end
-    tweenTP(tpos + Vector3.new(0, HEIGHT_BOOST, 0)) -- ยกหัว
-    tweenTP(tpos + dir * RAM_OVERSHOOT)             -- พุ่งเลย
-    tweenTP(tpos)                                   -- วกกลับ
+    tweenTP(tpos + Vector3.new(0, HEIGHT_BOOST, 0))
+    tweenTP(tpos + dir * RAM_OVERSHOOT)
+    tweenTP(tpos)
     if USE_NOCLIP_FOR_RAM then setCharacterNoClip(false) end
 
     local hrp2 = getHRP()
+    zeroVel(hrp2)
     return hrp2 and closeEnough(hrp2.Position, tpos)
 end
 
 --== Visual updater ==--
 task.spawn(function()
     while true do
-        task.wait(0.2)
+        task.wait(0.3)
         local _hrp = getHRP(); if not _hrp then continue end
         for part,info in pairs(targets) do
             if part and part.Parent then
                 local dist = distance(_hrp.Position, part.Position)
                 if info.lbl then
                     local name = RARITY_NAME[info.rarity] or ("R"..tostring(info.rarity))
-                    info.lbl.Text = string.format("[%s:%d]  %.0f studs", name, info.rarity, dist)
+                    local dh = math.floor((part.Position.Y - _hrp.Position.Y))
+                    info.lbl.Text = string.format("[%s:%d]  %.0f studs (Δh=%d)", name, info.rarity, dist, dh)
                 end
                 local visible = dist <= MAX_SCAN_RANGE
                 if info.bb then info.bb.Enabled = visible end
@@ -479,7 +548,7 @@ gui.Name = "IL_MeditateHunt"
 gui.ResetOnSpawn = false
 
 local frame = Instance.new("Frame", gui)
-frame.Size = UDim2.new(0, 400, 0, 170)
+frame.Size = UDim2.new(0, 430, 0, 200)
 frame.Position = UI_POS
 frame.BackgroundColor3 = Color3.fromRGB(25,25,30)
 frame.BorderSizePixel = 0
@@ -515,7 +584,7 @@ toggleBtn.TextColor3 = Color3.fromRGB(220,220,255)
 Instance.new("UICorner", toggleBtn).CornerRadius = UDim.new(0,8)
 
 local tpBtn = Instance.new("TextButton", frame)
-tpBtn.Size = UDim2.new(0, 110, 0, 26)
+tpBtn.Size = UDim2.new(0, 130, 0, 26)
 tpBtn.Position = UDim2.new(0,110,0,60)
 tpBtn.Text = "TP & Meditate"
 tpBtn.Font = Enum.Font.GothamSemibold
@@ -526,13 +595,23 @@ Instance.new("UICorner", tpBtn).CornerRadius = UDim.new(0,8)
 
 local collectBtn = Instance.new("TextButton", frame)
 collectBtn.Size = UDim2.new(0, 110, 0, 26)
-collectBtn.Position = UDim2.new(0,230,0,60)
+collectBtn.Position = UDim2.new(0,250,0,60)
 collectBtn.Text = "Collect Now"
 collectBtn.Font = Enum.Font.GothamSemibold
 collectBtn.TextSize = 14
 collectBtn.BackgroundColor3 = Color3.fromRGB(70,60,40)
 collectBtn.TextColor3 = Color3.fromRGB(255,240,170)
 Instance.new("UICorner", collectBtn).CornerRadius = UDim.new(0,8)
+
+local snapBtn = Instance.new("TextButton", frame)
+snapBtn.Size = UDim2.new(0, 110, 0, 26)
+snapBtn.Position = UDim2.new(0,370,0,60)
+snapBtn.Text = "Snap Meditate Y"
+snapBtn.Font = Enum.Font.GothamSemibold
+snapBtn.TextSize = 14
+snapBtn.BackgroundColor3 = Color3.fromRGB(50,70,40)
+snapBtn.TextColor3 = Color3.fromRGB(200,255,200)
+Instance.new("UICorner", snapBtn).CornerRadius = UDim.new(0,8)
 
 local footer = Instance.new("TextLabel", frame)
 footer.BackgroundTransparency = 1
@@ -607,10 +686,10 @@ toggleBtn.MouseButton1Click:Connect(function()
 end)
 
 tpBtn.MouseButton1Click:Connect(function()
-    stopFlyingSword()         -- ปิดดาบก่อนทุกครั้งที่กลับมานั่ง
+    stopFlyingSword()         -- ปิดดาบก่อนกลับไปนั่ง
     tpTo(MEDITATE_POS)
     task.wait(0.05)
-    startCultivate()          -- ไม่สแปม เพราะมี debounce
+    startCultivate()
 end)
 
 collectBtn.MouseButton1Click:Connect(function()
@@ -622,11 +701,12 @@ collectBtn.MouseButton1Click:Connect(function()
     -- ยิง Remote ก่อน
     if collectViaRemote(info, part, 1.2) then return end
 
-    -- ไม่ได้ -> fallback prompt
+    -- Fallback: Prompt
     local prompt = info.obj:FindFirstChildWhichIsA("ProximityPrompt", true)
     local hrp = getHRP()
     local p = getPart(info.obj)
     if prompt and hrp and p and (hrp.Position - p.Position).Magnitude <= COLLECT_RANGE then
+        zeroVel(hrp)
         if typeof(fireproximityprompt) == "function" then
             local hd = prompt.HoldDuration or 0
             if hd <= 0 then pcall(function() fireproximityprompt(prompt) end)
@@ -637,6 +717,10 @@ collectBtn.MouseButton1Click:Connect(function()
             end
         end
     end
+end)
+
+snapBtn.MouseButton1Click:Connect(function()
+    MEDITATE_POS = snapToFloorOrLast(MEDITATE_POS)
 end)
 
 modeBtn.MouseButton1Click:Connect(function()
@@ -650,7 +734,7 @@ end)
 -- update UI periodically
 task.spawn(function()
     while true do
-        task.wait(0.25)
+        task.wait(0.3)
         updateStatus()
     end
 end)
@@ -687,6 +771,7 @@ local function collectIfNear(info, range)
     local p = info.obj and getPart(info.obj)
     if prompt and hrp and p then
         if (hrp.Position - p.Position).Magnitude <= range then
+            zeroVel(hrp)
             return pressPrompt(prompt)
         end
     end
@@ -706,7 +791,7 @@ local function dynamicWait()
     else return 0.30 end
 end
 
---== Anti-freeze watchdog ==--
+--== Anti-freeze watchdog + noclip safety ==--
 local lastPos = nil
 local lastMove = os.clock()
 RunService.Heartbeat:Connect(function()
@@ -725,12 +810,18 @@ task.spawn(function()
             clearWaypoint()
             refreshList()
         end
+        if not RAM_INTO_ENABLED and __origCollide then
+            setCharacterNoClip(false)
+        end
     end
 end)
 
---== AUTO LOOP: Meditate <-> Hunt (ไม่มี hop) ==--
+--== AUTO LOOP: Meditate <-> Hunt (ไม่มี hop เกินจำเป็น) ==--
 local MODE = "Meditate"
 local EMPTY_GRACE = 0.5
+
+-- ทำให้จุดนั่งเริ่มต้นติดพื้น
+MEDITATE_POS = snapToFloorOrLast(MEDITATE_POS)
 
 task.spawn(function()
     while task.wait(dynamicWait()) do
@@ -778,10 +869,10 @@ task.spawn(function()
 
                     setWaypoint(node.part)
 
-                    -- ★ พุ่งชนเข้าเป้า (ram-into) ก่อน
+                    -- พุ่งชนเข้าเป้า (ram-into) ก่อน
                     local ok = ramInto(node.part)
                     if not ok then
-                        -- ถ้าไม่เข้าเขต -> ใช้ approach assist ล้อมมุม
+                        -- ถ้าไม่เข้าเขต -> approach assist ล้อมมุม
                         ok = approachTarget(node.part)
                         if not ok then
                             -- ยังไม่ถึงจริง ๆ ก็ลองตรง ๆ อีกครั้ง
@@ -789,13 +880,13 @@ task.spawn(function()
                         end
                     end
 
-                    -- ★ ปิดดาบชั่วคราวก่อนเก็บ (ถ้าตั้งค่า)
+                    -- ปิดดาบชั่วคราวก่อนเก็บ (ถ้าตั้งค่า)
                     if not COLLECT_WITH_SWORD then
                         stopFlyingSword()
                         task.wait(0.05)
                     end
 
-                    -- ★ ยิง Remote Collect ก่อน
+                    -- ยิง Remote Collect ก่อน
                     local done = false
                     if collectViaRemote(node.info, node.part, 1.2) then
                         done = true
