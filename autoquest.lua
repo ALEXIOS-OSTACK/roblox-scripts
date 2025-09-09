@@ -5,7 +5,7 @@ local farming = false
 local npcList = {"Junior","SeniorDisciple","HallMaster","SectElder"}
 local skillID = 3
 local fightTime = 15  -- เวลาสู้แต่ละ NPC (วินาที)
-local waitTime = 120 -- เวลาพักหลังครบ 4 ตัว
+local waitTime = 15 -- เวลาพักหลังครบ 4 ตัว
 
 -- Services
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
