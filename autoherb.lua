@@ -19,7 +19,7 @@ local TP_STEP_STUDS        = 120           -- ความยาวก้าว�
 local HEIGHT_BOOST         = 30            -- ยกหัวหลบสิ่งกีดขวางเมื่อไม่มี LoS
 local SAFE_Y_OFFSET        = 2
 local MAX_SCAN_RANGE       = 6000
-local ONLY_THESE           = { [3]=true, [4]=true, [5]=true }  -- เฉพาะ R3/4/5
+local ONLY_THESE           = { [4]=true, [5]=true }  -- เฉพาะ R3/4/5
 local NAME_BLACKLIST       = { Trap=true, Dummy=true }         -- กันของไม่ต้องการ
 local COLLECT_RANGE        = 14            -- เผื่อระยะเก็บนิดหน่อย
 local MAX_TARGET_STUCK_TIME= 10
