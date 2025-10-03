@@ -26,7 +26,7 @@ local MAX_TARGET_STUCK_TIME= 10
 local UI_POS               = UDim2.new(0, 60, 0, 80)
 local PRIORITY_MODE        = "Rarity"      -- "Rarity" | "Nearest" | "Score"
 local AUTO_ENABLED         = true
-local MEDITATE_POS         = Vector3.new(-318.5, 108.288, -460.074)
+local MEDITATE_POS         = Vector3.new(-2615.4, 141.752, 1385.9) -- << อัปเดตจากภาพ
 
 -- == Approach Assist ==
 local COLLECT_WITH_SWORD   = false         -- false = ปิดดาบก่อนเก็บเพื่อให้ Prompt ติดง่ายขึ้น
