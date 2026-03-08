@@ -15,7 +15,6 @@ _G.SelectedMonster = ""
 _G.FarmPosition  = "Behind"
 _G.FlySpeed      = 150
 _G.MinHP         = 30
-_G.AutoCollect   = false
 
 local BossList = {"Zanshi Bing Ren", "Zanshi Huo Ren"}
 
@@ -128,67 +127,7 @@ Tabs.Farm:AddButton({
     end
 })
 
--- Auto Collect Treasure Toggle
-local CollectToggle = Tabs.Farm:AddToggle("CollectToggle", {
-    Title = "Auto Collect Treasure",
-    Description = "Auto-collect all treasures in workspace.Treasures.",
-    Default = false
-})
-CollectToggle:OnChanged(function(v) _G.AutoCollect = v end)
-
 -- ==========================================
--- [ 5. Auto Collect Loop ]
--- ==========================================
-task.spawn(function()
-    while task.wait(0.5) do
-        if not _G.AutoCollect then continue end
-
-        local treasuresFolder = workspace:FindFirstChild("Treasures")
-        if not treasuresFolder then continue end
-
-        local char = LocalPlayer.Character
-        local hrp  = char and char:FindFirstChild("HumanoidRootPart")
-        if not hrp then continue end
-
-        for _, treasure in ipairs(treasuresFolder:GetChildren()) do
-            if not _G.AutoCollect then break end
-
-            -- หา ProximityPrompt ใน treasure แบบ recursive (ชื่อจริงคือ "OpenPrompt")
-            local pp = treasure:FindFirstChildWhichIsA("ProximityPrompt", true)
-
-            if not pp then continue end
-
-            -- หา root part ของ treasure เพื่อเดินไป
-            local targetPart = treasure.PrimaryPart
-                or treasure:FindFirstChildOfClass("BasePart")
-            if not targetPart then continue end
-
-            -- Teleport ไปใกล้ๆ (3 studs)
-            hrp.CFrame = targetPart.CFrame * CFrame.new(0, 0, 3)
-            task.wait(0.15)
-
-            -- Trigger ProximityPrompt
-            local triggered = false
-            -- วิธี 1: fireproximityprompt (executor built-in)
-            pcall(function()
-                fireproximityprompt(pp)
-                triggered = true
-            end)
-            -- วิธี 2: InputHoldBegin/End (fallback)
-            if not triggered then
-                pcall(function()
-                    pp:InputHoldBegin()
-                    task.wait(pp.HoldDuration + 0.1)
-                    pp:InputHoldEnd()
-                end)
-            end
-
-            task.wait(0.3)
-        end
-    end
-end)
-
-
 -- ==========================================
 local FlySlider = Tabs.Settings:AddSlider("FlySpeed", {
     Title = "Fly Speed",
