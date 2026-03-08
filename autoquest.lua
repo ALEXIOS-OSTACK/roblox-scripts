@@ -12,13 +12,9 @@ _G.AutoFarm      = false
 _G.BossPriority  = false
 _G.SelectedBosses = {}
 _G.SelectedMonster = ""
-_G.FarmPosition  = "หลังมอน"
+_G.FarmPosition  = "Behind"
 _G.FlySpeed      = 150
-_G.MinHP         = 30     -- หยุดถ้า HP ต่ำกว่า %นี้
-
--- Kill Counter
-local KillCount   = 0
-local SessionStart = tick()
+_G.MinHP         = 30
 
 local BossList = {"Zanshi Bing Ren", "Zanshi Huo Ren"}
 
@@ -47,11 +43,11 @@ local Window = Fluent:CreateWindow({
 })
 
 local Tabs = {
-    Farm     = Window:AddTab({ Title = "Farm",    Icon = "swords" }),
-    Stats    = Window:AddTab({ Title = "Stats",   Icon = "bar-chart-2" }),
+    Farm     = Window:AddTab({ Title = "Farm",     Icon = "swords" }),
+    Timer    = Window:AddTab({ Title = "Boss Timer", Icon = "clock" }),
     Settings = Window:AddTab({ Title = "Settings", Icon = "settings" }),
-    Config   = Window:AddTab({ Title = "Save",    Icon = "save" }),
-    Misc     = Window:AddTab({ Title = "Misc",    Icon = "box" }),
+    Config   = Window:AddTab({ Title = "Save",     Icon = "save" }),
+    Misc     = Window:AddTab({ Title = "Misc",     Icon = "box" }),
 }
 
 -- ==========================================
@@ -132,59 +128,97 @@ Tabs.Farm:AddButton({
     end
 })
 
--- STATS FIX: Fluent's AddParagraph has no update method.
--- Use a helper that finds the internal TextLabel and updates .Text directly.
-local function LiveLabel(tab, title, defaultContent)
-    local obj = tab:AddParagraph({ Title = title, Content = defaultContent })
-    local cachedLabel = nil
+-- ==========================================
+-- [ 5. Boss Timer Tab ]
+-- ==========================================
+Tabs.Timer:AddParagraph({ Title = "Boss Respawn Timer", Content = "Reads directly from workspace.RespawnInfo" })
 
-    return function(newText)
-        -- Find the content TextLabel on first call
-        if not cachedLabel then
+-- Helper: find & update internal TextLabel of a Paragraph
+local function LiveLabel(tab, title, default)
+    local obj = tab:AddParagraph({ Title = title, Content = default })
+    local lbl = nil
+    return function(text)
+        if not lbl then
             pcall(function()
                 if typeof(obj) == "Instance" then
                     for _, v in ipairs(obj:GetDescendants()) do
-                        if v:IsA("TextLabel") and v.Text == defaultContent then
-                            cachedLabel = v
-                        end
+                        if v:IsA("TextLabel") and v.Text == default then lbl = v end
                     end
                 end
             end)
         end
-        -- Update the label text
-        if cachedLabel then
-            cachedLabel.Text = newText
-        end
+        if lbl then lbl.Text = text end
     end
 end
 
-local SetKill   = LiveLabel(Tabs.Stats, "Kills",          "0")
-local SetKPH    = LiveLabel(Tabs.Stats, "Kills / Hour",   "0")
-local SetHP     = LiveLabel(Tabs.Stats, "HP",             "Waiting...")
-local SetTarget = LiveLabel(Tabs.Stats, "Target",         "-")
+-- สร้าง label สำหรับแต่ละบอส
+local bossTimerLabels = {}
+for _, bossName in ipairs(BossList) do
+    bossTimerLabels[bossName] = LiveLabel(Tabs.Timer, bossName, "Checking...")
+end
 
+-- ตัวนับว่าแจ้งเตือน 30s แล้วหรือยัง
+local notified30 = {}
+for _, b in ipairs(BossList) do notified30[b] = false end
+
+-- Loop อ่าน RespawnInfo ทุก 1 วินาที
 task.spawn(function()
     while task.wait(1) do
-        local elapsed = math.max(tick() - SessionStart, 1)
-        local kph = math.floor(KillCount / elapsed * 3600)
+        local respawnFolder = workspace:FindFirstChild("RespawnInfo")
 
-        local char = LocalPlayer.Character
-        local hum = char and char:FindFirstChildOfClass("Humanoid")
-        local hpText = "No character found"
-        if hum then
-            local pct = math.floor(hum.Health / hum.MaxHealth * 100)
-            hpText = pct .. "% (" .. math.floor(hum.Health) .. "/" .. math.floor(hum.MaxHealth) .. ")"
+        for _, bossName in ipairs(BossList) do
+            local setLabel = bossTimerLabels[bossName]
+            local status = "ALIVE"
+
+            if respawnFolder then
+                local bossFolder = respawnFolder:FindFirstChild(bossName)
+                if bossFolder then
+                    -- หา NumberValue หรือ IntValue ที่มีเวลา respawn
+                    local timeVal = nil
+                    for _, v in ipairs(bossFolder:GetChildren()) do
+                        if v:IsA("NumberValue") or v:IsA("IntValue") then
+                            timeVal = v
+                            break
+                        end
+                    end
+
+                    if timeVal and timeVal.Value > 0 then
+                        local secs = math.ceil(timeVal.Value)
+                        local mins  = math.floor(secs / 60)
+                        local s     = secs % 60
+                        status = string.format("Respawn in %d:%02d", mins, s)
+
+                        -- แจ้งเตือน 30 วินาทีก่อน respawn
+                        if secs <= 30 and not notified30[bossName] then
+                            notified30[bossName] = true
+                            Fluent:Notify({
+                                Title = "Boss Incoming!",
+                                Content = bossName .. " respawns in " .. secs .. "s!",
+                                Duration = 5
+                            })
+                        elseif secs > 30 then
+                            notified30[bossName] = false
+                        end
+                    elseif timeVal and timeVal.Value <= 0 then
+                        status = "ALIVE"
+                        notified30[bossName] = false
+                    end
+                end
+            else
+                -- RespawnInfo ไม่มี — เช็คจาก workspace.Enemies แทน
+                local enemies = workspace:FindFirstChild("Enemies")
+                if enemies and enemies:FindFirstChild(bossName) then
+                    status = "ALIVE"
+                else
+                    status = "Dead (no timer data)"
+                end
+            end
+
+            setLabel(status)
         end
-
-        local currentTarget = (_G.BossPriority and "Boss Priority") or _G.SelectedMonster
-        if currentTarget == "" then currentTarget = "-" end
-
-        SetKill(tostring(KillCount))
-        SetKPH(tostring(kph) .. "/hr")
-        SetHP(hpText)
-        SetTarget(currentTarget)
     end
 end)
+
 
 -- ==========================================
 -- [ 6. Config & Misc Tab ]
@@ -209,6 +243,8 @@ local HPSlider = Tabs.Settings:AddSlider("MinHP", {
 HPSlider:OnChanged(function(v) _G.MinHP = v end)
 
 local AntiAFKToggle = Tabs.Misc:AddToggle("AntiAFK", { Title = "Anti-AFK", Default = true })
+
+
 
 -- ==========================================
 -- [ 7. Anti-Cheat Bypass Engine ]
