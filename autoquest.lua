@@ -153,9 +153,8 @@ task.spawn(function()
         for _, treasure in ipairs(treasuresFolder:GetChildren()) do
             if not _G.AutoCollect then break end
 
-            -- หา ProximityPrompt ใน treasure (อาจอยู่ใน KeyHole หรือ child อื่น)
-            local pp = treasure:FindFirstChildOfClass("ProximityPrompt")
-                or treasure:FindFirstChild("ProximityPrompt", true)
+            -- หา ProximityPrompt ใน treasure แบบ recursive (ชื่อจริงคือ "OpenPrompt")
+            local pp = treasure:FindFirstChildWhichIsA("ProximityPrompt", true)
 
             if not pp then continue end
 
