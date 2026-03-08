@@ -131,9 +131,9 @@ Tabs.Farm:AddButton({
 -- ==========================================
 -- [ 5. Boss Timer Tab ]
 -- ==========================================
-Tabs.Timer:AddParagraph({ Title = "Boss Respawn Timer", Content = "Reads directly from workspace.RespawnInfo" })
+Tabs.Timer:AddParagraph({ Title = "Boss Respawn Timer", Content = "Auto-calibrates after first cycle." })
 
--- Helper: find & update internal TextLabel of a Paragraph
+-- LiveLabel helper (find internal TextLabel and update it)
 local function LiveLabel(tab, title, default)
     local obj = tab:AddParagraph({ Title = title, Content = default })
     local lbl = nil
@@ -151,70 +151,73 @@ local function LiveLabel(tab, title, default)
     end
 end
 
--- สร้าง label สำหรับแต่ละบอส
-local bossTimerLabels = {}
+-- State per boss
+local bossState = {}
 for _, bossName in ipairs(BossList) do
-    bossTimerLabels[bossName] = LiveLabel(Tabs.Timer, bossName, "Checking...")
+    bossState[bossName] = {
+        setLabel    = LiveLabel(Tabs.Timer, bossName, "Checking..."),
+        deathTime   = nil,      -- tick() ตอนตาย
+        duration    = 300,      -- respawn duration (calibrates อัตโนมัติ)
+        wasDead     = false,
+        notified    = false,
+    }
 end
 
--- ตัวนับว่าแจ้งเตือน 30s แล้วหรือยัง
-local notified30 = {}
-for _, b in ipairs(BossList) do notified30[b] = false end
+-- RemoteEvent name map: "Zanshi Bing Ren" → "Respawn_ZanshiBingRen"
+local function getBossEventName(bossName)
+    return "Respawn_" .. bossName:gsub(" ", "")
+end
 
--- Loop อ่าน RespawnInfo ทุก 1 วินาที
+-- Hook RemoteEvents → auto-calibrate duration ตอนบอส respawn จริง
+local debugFolder = ReplicatedStorage:WaitForChild("RemoteEvents"):FindFirstChild("Debug")
+for _, bossName in ipairs(BossList) do
+    local evName = getBossEventName(bossName)
+    local ev = debugFolder and debugFolder:FindFirstChild(evName)
+    if ev then
+        ev.OnClientEvent:Connect(function()
+            local state = bossState[bossName]
+            if state.deathTime then
+                state.duration = math.floor(tick() - state.deathTime)
+            end
+            state.wasDead   = false
+            state.deathTime = nil
+            state.notified  = false
+            state.setLabel("ALIVE (duration learnt: " .. math.floor(state.duration/60) .. "m)")
+        end)
+    end
+end
+
+-- Countdown loop (ทุก 1 วิ)
 task.spawn(function()
     while task.wait(1) do
-        local respawnFolder = workspace:FindFirstChild("RespawnInfo")
-
+        local riFolder = workspace:FindFirstChild("RespawnInfo")
         for _, bossName in ipairs(BossList) do
-            local setLabel = bossTimerLabels[bossName]
-            local status = "ALIVE"
+            local s = bossState[bossName]
+            local isDead = riFolder and riFolder:FindFirstChild(bossName) ~= nil
 
-            if respawnFolder then
-                local bossFolder = respawnFolder:FindFirstChild(bossName)
-                if bossFolder then
-                    -- หา NumberValue หรือ IntValue ที่มีเวลา respawn
-                    local timeVal = nil
-                    for _, v in ipairs(bossFolder:GetChildren()) do
-                        if v:IsA("NumberValue") or v:IsA("IntValue") then
-                            timeVal = v
-                            break
-                        end
-                    end
-
-                    if timeVal and timeVal.Value > 0 then
-                        local secs = math.ceil(timeVal.Value)
-                        local mins  = math.floor(secs / 60)
-                        local s     = secs % 60
-                        status = string.format("Respawn in %d:%02d", mins, s)
-
-                        -- แจ้งเตือน 30 วินาทีก่อน respawn
-                        if secs <= 30 and not notified30[bossName] then
-                            notified30[bossName] = true
-                            Fluent:Notify({
-                                Title = "Boss Incoming!",
-                                Content = bossName .. " respawns in " .. secs .. "s!",
-                                Duration = 5
-                            })
-                        elseif secs > 30 then
-                            notified30[bossName] = false
-                        end
-                    elseif timeVal and timeVal.Value <= 0 then
-                        status = "ALIVE"
-                        notified30[bossName] = false
-                    end
+            if isDead then
+                if not s.wasDead then
+                    s.deathTime = tick()
+                    s.wasDead   = true
+                    s.notified  = false
                 end
-            else
-                -- RespawnInfo ไม่มี — เช็คจาก workspace.Enemies แทน
-                local enemies = workspace:FindFirstChild("Enemies")
-                if enemies and enemies:FindFirstChild(bossName) then
-                    status = "ALIVE"
-                else
-                    status = "Dead (no timer data)"
+                local elapsed   = tick() - (s.deathTime or tick())
+                local remaining = math.max(0, s.duration - elapsed)
+                local m = math.floor(remaining / 60)
+                local sec = math.floor(remaining % 60)
+                s.setLabel(string.format("Respawn in %d:%02d", m, sec))
+
+                if remaining <= 30 and not s.notified then
+                    s.notified = true
+                    Fluent:Notify({
+                        Title   = "Boss Incoming!",
+                        Content = bossName .. " respawns in ~" .. math.ceil(remaining) .. "s!",
+                        Duration = 5
+                    })
                 end
+            elseif not s.wasDead then
+                s.setLabel("ALIVE")
             end
-
-            setLabel(status)
         end
     end
 end)
