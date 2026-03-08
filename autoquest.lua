@@ -15,6 +15,7 @@ _G.SelectedMonster = ""
 _G.FarmPosition  = "Behind"
 _G.FlySpeed      = 150
 _G.MinHP         = 30
+_G.AutoCollect   = false
 
 local BossList = {"Zanshi Bing Ren", "Zanshi Huo Ren"}
 
@@ -44,7 +45,6 @@ local Window = Fluent:CreateWindow({
 
 local Tabs = {
     Farm     = Window:AddTab({ Title = "Farm",     Icon = "swords" }),
-    Timer    = Window:AddTab({ Title = "Boss Timer", Icon = "clock" }),
     Settings = Window:AddTab({ Title = "Settings", Icon = "settings" }),
     Config   = Window:AddTab({ Title = "Save",     Icon = "save" }),
     Misc     = Window:AddTab({ Title = "Misc",     Icon = "box" }),
@@ -128,107 +128,68 @@ Tabs.Farm:AddButton({
     end
 })
 
+-- Auto Collect Treasure Toggle
+local CollectToggle = Tabs.Farm:AddToggle("CollectToggle", {
+    Title = "Auto Collect Treasure",
+    Description = "Auto-collect all treasures in workspace.Treasures.",
+    Default = false
+})
+CollectToggle:OnChanged(function(v) _G.AutoCollect = v end)
+
 -- ==========================================
--- [ 5. Boss Timer Tab ]
+-- [ 5. Auto Collect Loop ]
 -- ==========================================
-Tabs.Timer:AddParagraph({ Title = "Boss Respawn Timer", Content = "Auto-calibrates after first cycle." })
-
--- LiveLabel: สร้าง Paragraph แล้วหา TextLabel จาก CoreGui (Fluent คืน table ไม่ใช่ Instance)
-local coreGuiRef = game:GetService("CoreGui")
-local function LiveLabel(tab, title, uniqueSeed)
-    -- ใส่ seed ไว้ใน content เพื่อ identify label ที่ถูกต้อง
-    tab:AddParagraph({ Title = title, Content = uniqueSeed })
-    local lbl = nil
-    return function(text)
-        -- หา TextLabel ครั้งแรกหลัง Fluent render เสร็จ
-        if not lbl then
-            for _, v in ipairs(coreGuiRef:GetDescendants()) do
-                if v:IsA("TextLabel") and v.Text == uniqueSeed then
-                    lbl = v
-                    break
-                end
-            end
-        end
-        if lbl then lbl.Text = text end
-    end
-end
-
-
--- State per boss
-local bossState = {}
-for _, bossName in ipairs(BossList) do
-    local seed = "##BOSS##" .. bossName  -- unique seed ต่อบอส
-    bossState[bossName] = {
-        setLabel  = LiveLabel(Tabs.Timer, bossName, seed),
-        deathTime = nil,
-        duration  = 300,
-        wasDead   = false,
-        notified  = false,
-    }
-end
-
--- RemoteEvent name map: "Zanshi Bing Ren" → "Respawn_ZanshiBingRen"
-local function getBossEventName(bossName)
-    return "Respawn_" .. bossName:gsub(" ", "")
-end
-
--- Hook RemoteEvents → auto-calibrate duration ตอนบอส respawn จริง
-local debugFolder = ReplicatedStorage:WaitForChild("RemoteEvents"):FindFirstChild("Debug")
-for _, bossName in ipairs(BossList) do
-    local evName = getBossEventName(bossName)
-    local ev = debugFolder and debugFolder:FindFirstChild(evName)
-    if ev then
-        ev.OnClientEvent:Connect(function()
-            local state = bossState[bossName]
-            if state.deathTime then
-                state.duration = math.floor(tick() - state.deathTime)
-            end
-            state.wasDead   = false
-            state.deathTime = nil
-            state.notified  = false
-            state.setLabel("ALIVE (duration learnt: " .. math.floor(state.duration/60) .. "m)")
-        end)
-    end
-end
-
--- Countdown loop (ทุก 1 วิ)
 task.spawn(function()
-    while task.wait(1) do
-        local riFolder = workspace:FindFirstChild("RespawnInfo")
-        for _, bossName in ipairs(BossList) do
-            local s = bossState[bossName]
-            local isDead = riFolder and riFolder:FindFirstChild(bossName) ~= nil
+    while task.wait(0.5) do
+        if not _G.AutoCollect then continue end
 
-            if isDead then
-                if not s.wasDead then
-                    s.deathTime = tick()
-                    s.wasDead   = true
-                    s.notified  = false
-                end
-                local elapsed   = tick() - (s.deathTime or tick())
-                local remaining = math.max(0, s.duration - elapsed)
-                local m = math.floor(remaining / 60)
-                local sec = math.floor(remaining % 60)
-                s.setLabel(string.format("Respawn in %d:%02d", m, sec))
+        local treasuresFolder = workspace:FindFirstChild("Treasures")
+        if not treasuresFolder then continue end
 
-                if remaining <= 30 and not s.notified then
-                    s.notified = true
-                    Fluent:Notify({
-                        Title   = "Boss Incoming!",
-                        Content = bossName .. " respawns in ~" .. math.ceil(remaining) .. "s!",
-                        Duration = 5
-                    })
-                end
-            elseif not s.wasDead then
-                s.setLabel("ALIVE")
+        local char = LocalPlayer.Character
+        local hrp  = char and char:FindFirstChild("HumanoidRootPart")
+        if not hrp then continue end
+
+        for _, treasure in ipairs(treasuresFolder:GetChildren()) do
+            if not _G.AutoCollect then break end
+
+            -- หา ProximityPrompt ใน treasure (อาจอยู่ใน KeyHole หรือ child อื่น)
+            local pp = treasure:FindFirstChildOfClass("ProximityPrompt")
+                or treasure:FindFirstChild("ProximityPrompt", true)
+
+            if not pp then continue end
+
+            -- หา root part ของ treasure เพื่อเดินไป
+            local targetPart = treasure.PrimaryPart
+                or treasure:FindFirstChildOfClass("BasePart")
+            if not targetPart then continue end
+
+            -- Teleport ไปใกล้ๆ (3 studs)
+            hrp.CFrame = targetPart.CFrame * CFrame.new(0, 0, 3)
+            task.wait(0.15)
+
+            -- Trigger ProximityPrompt
+            local triggered = false
+            -- วิธี 1: fireproximityprompt (executor built-in)
+            pcall(function()
+                fireproximityprompt(pp)
+                triggered = true
+            end)
+            -- วิธี 2: InputHoldBegin/End (fallback)
+            if not triggered then
+                pcall(function()
+                    pp:InputHoldBegin()
+                    task.wait(pp.HoldDuration + 0.1)
+                    pp:InputHoldEnd()
+                end)
             end
+
+            task.wait(0.3)
         end
     end
 end)
 
 
--- ==========================================
--- [ 6. Config & Misc Tab ]
 -- ==========================================
 local FlySlider = Tabs.Settings:AddSlider("FlySpeed", {
     Title = "Fly Speed",
