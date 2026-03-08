@@ -133,33 +133,37 @@ Tabs.Farm:AddButton({
 -- ==========================================
 Tabs.Timer:AddParagraph({ Title = "Boss Respawn Timer", Content = "Auto-calibrates after first cycle." })
 
--- LiveLabel helper (find internal TextLabel and update it)
-local function LiveLabel(tab, title, default)
-    local obj = tab:AddParagraph({ Title = title, Content = default })
+-- LiveLabel: สร้าง Paragraph แล้วหา TextLabel จาก CoreGui (Fluent คืน table ไม่ใช่ Instance)
+local coreGuiRef = game:GetService("CoreGui")
+local function LiveLabel(tab, title, uniqueSeed)
+    -- ใส่ seed ไว้ใน content เพื่อ identify label ที่ถูกต้อง
+    tab:AddParagraph({ Title = title, Content = uniqueSeed })
     local lbl = nil
     return function(text)
+        -- หา TextLabel ครั้งแรกหลัง Fluent render เสร็จ
         if not lbl then
-            pcall(function()
-                if typeof(obj) == "Instance" then
-                    for _, v in ipairs(obj:GetDescendants()) do
-                        if v:IsA("TextLabel") and v.Text == default then lbl = v end
-                    end
+            for _, v in ipairs(coreGuiRef:GetDescendants()) do
+                if v:IsA("TextLabel") and v.Text == uniqueSeed then
+                    lbl = v
+                    break
                 end
-            end)
+            end
         end
         if lbl then lbl.Text = text end
     end
 end
 
+
 -- State per boss
 local bossState = {}
 for _, bossName in ipairs(BossList) do
+    local seed = "##BOSS##" .. bossName  -- unique seed ต่อบอส
     bossState[bossName] = {
-        setLabel    = LiveLabel(Tabs.Timer, bossName, "Checking..."),
-        deathTime   = nil,      -- tick() ตอนตาย
-        duration    = 300,      -- respawn duration (calibrates อัตโนมัติ)
-        wasDead     = false,
-        notified    = false,
+        setLabel  = LiveLabel(Tabs.Timer, bossName, seed),
+        deathTime = nil,
+        duration  = 300,
+        wasDead   = false,
+        notified  = false,
     }
 end
 
