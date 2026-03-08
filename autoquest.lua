@@ -1,129 +1,516 @@
-
-
--- ตั้งค่าตัวแปร
-local farming = false
-local npcList = {"FallenDisciple","SectElder"}
-local skillID = 3
-local fightTime = 15  -- เวลาสู้แต่ละ NPC (วินาที)
-local waitTime = 5 -- เวลาพักหลังครบ 4 ตัว
-
--- Services
+local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local Remotes = ReplicatedStorage:WaitForChild("Remotes")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local VirtualUser = game:GetService("VirtualUser")
+local LocalPlayer = Players.LocalPlayer
 
--- ฟังก์ชันต่อสู้
-local function startBattle(npcName)
-    local args = {npcName}
-    Remotes:WaitForChild("StartBattle"):FireServer(unpack(args))
+-- ==========================================
+-- [ 1. Global Config ]
+-- ==========================================
+_G.AutoFarm      = false
+_G.BossPriority  = false
+_G.SelectedBosses = {}
+_G.SelectedMonster = ""
+_G.FarmPosition  = "หลังมอน"
+_G.FlySpeed      = 150
+_G.MinHP         = 30     -- หยุดถ้า HP ต่ำกว่า %นี้
+
+-- Kill Counter
+local KillCount   = 0
+local SessionStart = tick()
+
+local BossList = {"Zanshi Bing Ren", "Zanshi Huo Ren"}
+
+-- ==========================================
+-- [ 2. UI Library ]
+-- ==========================================
+-- บันทึก ScreenGui ที่มีอยู่ก่อน Fluent โหลด (เพื่อหา Fluent GUI ทีหลัง)
+local coreGui = game:GetService("CoreGui")
+local preExistingGuis = {}
+for _, v in ipairs(coreGui:GetChildren()) do
+    preExistingGuis[v] = true
 end
 
-local function useSkill(id)
-    local args = {id}
-    Remotes:WaitForChild("Skill"):FireServer(unpack(args))
-end
+local Fluent         = loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
+local SaveManager    = loadstring(game:HttpGet("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Addons/SaveManager.lua"))()
+local InterfaceManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Addons/InterfaceManager.lua"))()
 
-local function fightNPC(npcName, statusLabel)
-    statusLabel.Text = "⚔ กำลังสู้: " .. npcName
-    startBattle(npcName)
-    for i = 1, fightTime do
-        if not farming then break end
-        useSkill(skillID)
-        task.wait(1)
+local Window = Fluent:CreateWindow({
+    Title = "Soul Cultivation Hub",
+    SubTitle = "Auto Farm | v6.0",
+    TabWidth = 160,
+    Size = UDim2.fromOffset(580, 460),
+    Acrylic = false,
+    Theme = "Dark",
+    MinimizeKey = Enum.KeyCode.LeftControl
+})
+
+local Tabs = {
+    Farm     = Window:AddTab({ Title = "Farm",    Icon = "swords" }),
+    Stats    = Window:AddTab({ Title = "Stats",   Icon = "bar-chart-2" }),
+    Settings = Window:AddTab({ Title = "Settings", Icon = "settings" }),
+    Config   = Window:AddTab({ Title = "Save",    Icon = "save" }),
+    Misc     = Window:AddTab({ Title = "Misc",    Icon = "box" }),
+}
+
+-- ==========================================
+-- [ 3. Entity Scanner ]
+-- ==========================================
+local function GetMonsterList()
+    local names = {}
+    local e = workspace:FindFirstChild("Enemies")
+    if e then
+        for _, obj in ipairs(e:GetChildren()) do
+            if obj:FindFirstChild("Humanoid") and not obj.Name:lower():find("zanshi") then
+                if not table.find(names, obj.Name) then table.insert(names, obj.Name) end
+            end
+        end
     end
-    statusLabel.Text = "✅ ฆ่า " .. npcName
+    table.sort(names)
+    return names
 end
 
--- ==============================
--- 🌟 UI
--- ==============================
-local ScreenGui = Instance.new("ScreenGui", game.Players.LocalPlayer:WaitForChild("PlayerGui"))
-local Frame = Instance.new("Frame", ScreenGui)
-Frame.BackgroundColor3 = Color3.fromRGB(25,25,25)
-Frame.Position = UDim2.new(0.7,0,0.3,0)
-Frame.Size = UDim2.new(0,240,0,150)
+-- ==========================================
+-- [ 4. Farm Tab UI ]
+-- ==========================================
+Tabs.Farm:AddParagraph({ Title = "Farm Controls", Content = "Pick a target, choose a position, then start." })
 
--- มุมโค้ง + เส้นขอบ
-Instance.new("UICorner", Frame).CornerRadius = UDim.new(0,12)
-local stroke = Instance.new("UIStroke", Frame)
-stroke.Color = Color3.fromRGB(80,80,80)
-stroke.Thickness = 2
+local FarmToggle = Tabs.Farm:AddToggle("FarmToggle", { Title = "Auto Farm", Default = false })
+FarmToggle:OnChanged(function(v) _G.AutoFarm = v end)
 
--- Title
-local Title = Instance.new("TextLabel", Frame)
-Title.BackgroundTransparency = 1
-Title.Size = UDim2.new(1,0,0,30)
-Title.Text = "⚔ Auto Farm NPC"
-Title.TextColor3 = Color3.fromRGB(255,255,255)
-Title.Font = Enum.Font.GothamBold
-Title.TextSize = 18
+local PriorityToggle = Tabs.Farm:AddToggle("PriorityToggle", { Title = "Boss Priority", Default = false, Description = "Kill bosses before regular mobs." })
+PriorityToggle:OnChanged(function(v) _G.BossPriority = v end)
 
--- สถานะ
-local Status = Instance.new("TextLabel", Frame)
-Status.BackgroundTransparency = 1
-Status.Position = UDim2.new(0,0,0.25,0)
-Status.Size = UDim2.new(1,0,0,25)
-Status.Text = "⏸ รอเริ่ม..."
-Status.TextColor3 = Color3.fromRGB(200,200,200)
-Status.Font = Enum.Font.Gotham
-Status.TextSize = 14
+local BossDropdown = Tabs.Farm:AddDropdown("BossDropdown", {
+    Title = "Target Boss",
+    Values = BossList,
+    Multi = true,
+    Default = {},
+})
+BossDropdown:OnChanged(function(v) _G.SelectedBosses = v end)
 
--- ปุ่ม Start
-local StartButton = Instance.new("TextButton", Frame)
-StartButton.Position = UDim2.new(0.1,0,0.55,0)
-StartButton.Size = UDim2.new(0.35,0,0,40)
-StartButton.Text = "▶ Start"
-StartButton.BackgroundColor3 = Color3.fromRGB(0,170,80)
-StartButton.TextColor3 = Color3.fromRGB(255,255,255)
-StartButton.Font = Enum.Font.GothamBold
-StartButton.TextSize = 16
-Instance.new("UICorner", StartButton).CornerRadius = UDim.new(0,10)
+-- Monster Dropdown
+local monsterValues = GetMonsterList()
+if #monsterValues == 0 then monsterValues = {"(No Monsters Found)"} end
 
--- ปุ่ม Stop
-local StopButton = Instance.new("TextButton", Frame)
-StopButton.Position = UDim2.new(0.55,0,0.55,0)
-StopButton.Size = UDim2.new(0.35,0,0,40)
-StopButton.Text = "⛔ Stop"
-StopButton.BackgroundColor3 = Color3.fromRGB(170,50,50)
-StopButton.TextColor3 = Color3.fromRGB(255,255,255)
-StopButton.Font = Enum.Font.GothamBold
-StopButton.TextSize = 16
-Instance.new("UICorner", StopButton).CornerRadius = UDim.new(0,10)
+local MonsterDropdown = Tabs.Farm:AddDropdown("MonsterDropdown", {
+    Title = "Target Monster",
+    Values = monsterValues,
+    Default = 1,
+})
+MonsterDropdown:OnChanged(function(v)
+    if v ~= "(No Monsters Found)" then _G.SelectedMonster = v end
+end)
+if monsterValues[1] ~= "(No Monsters Found)" then
+    _G.SelectedMonster = monsterValues[1]
+end
 
--- ให้ Frame ลากได้
-Frame.Active = true
-Frame.Draggable = true
+local PositionDropdown = Tabs.Farm:AddDropdown("FarmPosition", {
+    Title = "Stand Position",
+    Description = "Where to stand while attacking.",
+    Values = {"Behind", "On Head", "Under"},
+    Default = 1,
+})
+PositionDropdown:OnChanged(function(v) _G.FarmPosition = v end)
 
--- ==============================
--- 🔧 Logic ทำงานกับปุ่ม
--- ==============================
+Tabs.Farm:AddButton({
+    Title = "Refresh Targets",
+    Description = "Re-scan all enemies in the area.",
+    Callback = function()
+        local newList = GetMonsterList()
+        if #newList == 0 then newList = {"(No Monsters Found)"} end
+        pcall(function() MonsterDropdown:SetValue(newList[1]) end)
+        if newList[1] ~= "(No Monsters Found)" then
+            _G.SelectedMonster = newList[1]
+        end
+        Fluent:Notify({
+            Title = "Refreshed",
+            Content = "Found " .. #newList .. " monster type(s).\nTarget: " .. _G.SelectedMonster,
+            Duration = 3
+        })
+    end
+})
 
-StartButton.MouseButton1Click:Connect(function()
-    if not farming then
-        farming = true
-        Status.Text = "▶ Auto Farm เริ่มทำงาน"
-        while farming do
-            -- ไล่สู้ครบ 4 ตัว
-            for _, npc in ipairs(npcList) do
-                if farming then
-                    fightNPC(npc, Status)
-                else
-                    break
+-- STATS FIX: Fluent's AddParagraph has no update method.
+-- Use a helper that finds the internal TextLabel and updates .Text directly.
+local function LiveLabel(tab, title, defaultContent)
+    local obj = tab:AddParagraph({ Title = title, Content = defaultContent })
+    local cachedLabel = nil
+
+    return function(newText)
+        -- Find the content TextLabel on first call
+        if not cachedLabel then
+            pcall(function()
+                if typeof(obj) == "Instance" then
+                    for _, v in ipairs(obj:GetDescendants()) do
+                        if v:IsA("TextLabel") and v.Text == defaultContent then
+                            cachedLabel = v
+                        end
+                    end
+                end
+            end)
+        end
+        -- Update the label text
+        if cachedLabel then
+            cachedLabel.Text = newText
+        end
+    end
+end
+
+local SetKill   = LiveLabel(Tabs.Stats, "Kills",          "0")
+local SetKPH    = LiveLabel(Tabs.Stats, "Kills / Hour",   "0")
+local SetHP     = LiveLabel(Tabs.Stats, "HP",             "Waiting...")
+local SetTarget = LiveLabel(Tabs.Stats, "Target",         "-")
+
+task.spawn(function()
+    while task.wait(1) do
+        local elapsed = math.max(tick() - SessionStart, 1)
+        local kph = math.floor(KillCount / elapsed * 3600)
+
+        local char = LocalPlayer.Character
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        local hpText = "No character found"
+        if hum then
+            local pct = math.floor(hum.Health / hum.MaxHealth * 100)
+            hpText = pct .. "% (" .. math.floor(hum.Health) .. "/" .. math.floor(hum.MaxHealth) .. ")"
+        end
+
+        local currentTarget = (_G.BossPriority and "Boss Priority") or _G.SelectedMonster
+        if currentTarget == "" then currentTarget = "-" end
+
+        SetKill(tostring(KillCount))
+        SetKPH(tostring(kph) .. "/hr")
+        SetHP(hpText)
+        SetTarget(currentTarget)
+    end
+end)
+
+-- ==========================================
+-- [ 6. Config & Misc Tab ]
+-- ==========================================
+local FlySlider = Tabs.Settings:AddSlider("FlySpeed", {
+    Title = "Fly Speed",
+    Default = 150, Min = 50, Max = 500, Rounding = 0
+})
+FlySlider:OnChanged(function(v) _G.FlySpeed = v end)
+
+local AttackSlider = Tabs.Settings:AddSlider("AttackRate", {
+    Title = "Attack Speed (ms)",
+    Description = "Higher = slower = safer",
+    Default = 18, Min = 10, Max = 100, Rounding = 0
+})
+
+local HPSlider = Tabs.Settings:AddSlider("MinHP", {
+    Title = "Safety HP (%)",
+    Description = "Stop farming below this HP. Set 0 to disable.",
+    Default = 30, Min = 0, Max = 90, Rounding = 0
+})
+HPSlider:OnChanged(function(v) _G.MinHP = v end)
+
+local AntiAFKToggle = Tabs.Misc:AddToggle("AntiAFK", { Title = "Anti-AFK", Default = true })
+
+-- ==========================================
+-- [ 7. Anti-Cheat Bypass Engine ]
+-- ==========================================
+local BASE_COOLDOWN = 0.18
+local JITTER_RANGE  = 0.08
+AttackSlider:OnChanged(function(v) BASE_COOLDOWN = v / 1000 end)
+
+local function StopPhysicsFly()
+    local hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+    if hrp then
+        for _, name in ipairs({"BypassPosition", "BypassOrientation", "BypassAttachment"}) do
+            local p = hrp:FindFirstChild(name)
+            if p then p:Destroy() end
+        end
+        hrp.AssemblyLinearVelocity  = Vector3.zero
+        hrp.AssemblyAngularVelocity = Vector3.zero
+    end
+end
+
+local function PhysicsFlyTo(targetCFrame)
+    local hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+
+    local att = hrp:FindFirstChild("BypassAttachment") or Instance.new("Attachment", hrp)
+    att.Name = "BypassAttachment"
+
+    local pos = hrp:FindFirstChild("BypassPosition") or Instance.new("AlignPosition", hrp)
+    pos.Name = "BypassPosition"; pos.Attachment0 = att
+    pos.Mode = Enum.PositionAlignmentMode.OneAttachment
+    pos.MaxForce = math.huge; pos.MaxVelocity = _G.FlySpeed; pos.Responsiveness = 200
+
+    local ori = hrp:FindFirstChild("BypassOrientation") or Instance.new("AlignOrientation", hrp)
+    ori.Name = "BypassOrientation"; ori.Attachment0 = att
+    ori.Mode = Enum.OrientationAlignmentMode.OneAttachment
+    ori.MaxTorque = math.huge; ori.Responsiveness = 200
+
+    pos.Position = targetCFrame.Position
+    ori.CFrame   = targetCFrame
+end
+
+local lastAttackTime = 0
+local function SafeAttack()
+    local now = tick()
+    local cooldown = BASE_COOLDOWN + math.random() * JITTER_RANGE
+    if now - lastAttackTime < cooldown then return end
+    lastAttackTime = now
+
+    local char = LocalPlayer.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    if not char or not hrp then return end
+
+    pcall(function()
+        local tool = char:FindFirstChild("Light") or LocalPlayer.Backpack:FindFirstChild("Light")
+        if not tool then return end
+        LocalPlayer.PlayerGui.Inventory.Manager.Toolbar:FireServer(1, tool)
+        ReplicatedStorage.RemoteEvents.Attack:FireServer("Light", { ["RootPart"] = hrp })
+    end)
+end
+
+-- ==========================================
+-- [ 8. Target Finder (Boss Priority Fixed) ]
+-- ==========================================
+local function GetCurrentTarget()
+    local enemies = workspace:FindFirstChild("Enemies")
+    if not enemies then return nil end
+
+    -- Boss Priority: ถ้าเปิด BossPriority จะหาบอสก่อน
+    if _G.BossPriority then
+        for bossName, enabled in pairs(_G.SelectedBosses) do
+            if enabled then
+                local b = enemies:FindFirstChild(bossName)
+                if b and b:FindFirstChild("Humanoid") and b.Humanoid.Health > 0
+                   and b:FindFirstChild("HumanoidRootPart") then
+                    return b
                 end
             end
-            -- รอ cooldown รวม
-            if farming then
-                for t = waitTime,1,-1 do
-                    Status.Text = "⏳ รอ "..t.." วิ"
-                    task.wait(1)
-                    if not farming then break end
+        end
+        -- ถ้าบอสตาย/ไม่มี ก็ fall through ไปหามอนปกติ
+    end
+
+    -- หามอนที่เลือก
+    if _G.SelectedMonster == "" then return nil end
+    for _, e in ipairs(enemies:GetChildren()) do
+        if e.Name == _G.SelectedMonster then
+            local hum = e:FindFirstChild("Humanoid")
+            if hum and hum.Health > 0 and e:FindFirstChild("HumanoidRootPart") then
+                return e
+            end
+        end
+    end
+    return nil
+end
+
+-- ==========================================
+-- [ 9. Kill Detector ]
+-- ==========================================
+local lastTargetHP = math.huge
+task.spawn(function()
+    while task.wait(0.2) do
+        local target = GetCurrentTarget()
+        if target then
+            local hum = target:FindFirstChild("Humanoid")
+            if hum then
+                if hum.Health <= 0 and lastTargetHP > 0 then
+                    KillCount = KillCount + 1
                 end
+                lastTargetHP = hum.Health
+            end
+        else
+            lastTargetHP = math.huge
+        end
+    end
+end)
+
+-- ==========================================
+-- [ 10. Main Farm Loop ]
+-- ==========================================
+task.spawn(function()
+    while task.wait(0.1 + math.random() * 0.05) do
+        if not _G.AutoFarm then
+            StopPhysicsFly()
+        else
+            -- HP Safety Check
+            local char = LocalPlayer.Character
+            local hum = char and char:FindFirstChildOfClass("Humanoid")
+            if hum and _G.MinHP > 0 then
+                local hpPct = hum.Health / hum.MaxHealth * 100
+                if hpPct < _G.MinHP then
+                    StopPhysicsFly()
+                    if _G.AutoFarm then
+                        _G.AutoFarm = false
+                        pcall(function() FarmToggle:SetValue(false) end)
+                        Fluent:Notify({
+                            Title = "Warning: Low HP!",
+                            Content = "HP at " .. math.floor(hpPct) .. "% — Auto Farm stopped for safety.",
+                            Duration = 5
+                        })
+                    end
+                    continue
+                end
+            end
+
+            local target = GetCurrentTarget()
+            local hrp = char and char:FindFirstChild("HumanoidRootPart")
+
+            if target and hrp then
+                local targetRoot = target.HumanoidRootPart
+
+                -- คำนวณ standPos ตามตำแหน่งที่เลือก
+                local offset
+                if _G.FarmPosition == "On Head" then
+                    offset = CFrame.new(0, 4, 0)
+                elseif _G.FarmPosition == "Under" then
+                    offset = CFrame.new(0, -3, 0)
+                else
+                    offset = CFrame.new(0, 0, 3)  -- Behind (default)
+                end
+                local standPos = targetRoot.CFrame * offset
+                local distToTarget = (hrp.Position - targetRoot.Position).Magnitude
+
+                if distToTarget > 12 then
+                    PhysicsFlyTo(standPos)
+                else
+                    StopPhysicsFly()
+                    hrp.CFrame = standPos
+                    SafeAttack()
+                end
+            else
+                StopPhysicsFly()
             end
         end
     end
 end)
 
-StopButton.MouseButton1Click:Connect(function()
-    farming = false
-    Status.Text = "⏸ หยุดแล้ว"
+-- ==========================================
+-- [ 11. Background Services ]
+-- ==========================================
+-- Safe Noclip (เฉพาะตอน Physics Fly)
+RunService.Stepped:Connect(function()
+    local char = LocalPlayer.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    local flying = hrp and hrp:FindFirstChild("BypassPosition") ~= nil
+    if _G.AutoFarm and flying and char then
+        for _, p in ipairs(char:GetChildren()) do
+            if p:IsA("BasePart") then p.CanCollide = false end
+        end
+    end
 end)
 
+-- Anti-AFK
+LocalPlayer.Idled:Connect(function()
+    if Fluent.Options.AntiAFK and Fluent.Options.AntiAFK.Value then
+        VirtualUser:CaptureController()
+        VirtualUser:ClickButton2(Vector2.zero)
+    end
+end)
+
+-- ==========================================
+-- [ 12. Save Manager ]
+-- ==========================================
+SaveManager:SetLibrary(Fluent)
+InterfaceManager:SetLibrary(Fluent)
+SaveManager:IgnoreThemeSettings()
+SaveManager:SetIgnoreIndexes({})
+InterfaceManager:SetFolder("SoulCultivationHub")
+SaveManager:SetFolder("SoulCultivationHub/Configs")
+InterfaceManager:BuildInterfaceSection(Tabs.Config)
+SaveManager:BuildConfigSection(Tabs.Config)
+
+Window:SelectTab(1)
+SaveManager:LoadAutoloadConfig()
+
+-- หา Fluent ScreenGui (GUI ใหม่ที่เพิ่มหลัง Fluent โหลด)
+local fluentGui = nil
+for _, v in ipairs(coreGui:GetChildren()) do
+    if v:IsA("ScreenGui") and not preExistingGuis[v] then
+        fluentGui = v
+        break
+    end
+end
+
+Fluent:Notify({
+    Title = "Soul Cultivation Hub",
+    Content = "Loaded successfully! Found " .. #monsterValues .. " monster type(s).",
+    Duration = 4
+})
+
+-- ==========================================
+-- [ Floating Toggle Icon ]
+-- ==========================================
+local iconGui = Instance.new("ScreenGui")
+iconGui.Name         = "SCH_Icon"
+iconGui.ResetOnSpawn = false
+iconGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+pcall(function() iconGui.Parent = coreGui end)
+if not iconGui.Parent or iconGui.Parent ~= coreGui then
+    iconGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+end
+
+local icon = Instance.new("TextButton")
+icon.Size             = UDim2.fromOffset(48, 48)
+icon.Position         = UDim2.new(0, 16, 0.5, -24)
+icon.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+icon.Text             = "HUB"
+icon.TextColor3       = Color3.fromRGB(0, 200, 255)
+icon.Font             = Enum.Font.GothamBold
+icon.TextSize         = 13
+icon.BorderSizePixel  = 0
+icon.Parent           = iconGui
+Instance.new("UICorner", icon).CornerRadius = UDim.new(1, 0)
+
+local stroke = Instance.new("UIStroke", icon)
+stroke.Color     = Color3.fromRGB(0, 200, 255)
+stroke.Thickness = 2
+
+local uiVisible  = true
+local isDragging = false
+local dragStart, iconStartPos
+
+icon.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        isDragging    = false
+        dragStart     = input.Position
+        iconStartPos  = icon.Position
+    end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+    if dragStart and input.UserInputType == Enum.UserInputType.MouseMovement then
+        local delta = input.Position - dragStart
+        if delta.Magnitude > 6 then
+            isDragging = true
+            icon.Position = UDim2.new(
+                iconStartPos.X.Scale, iconStartPos.X.Offset + delta.X,
+                iconStartPos.Y.Scale, iconStartPos.Y.Offset + delta.Y
+            )
+        end
+    end
+end)
+
+icon.MouseButton1Up:Connect(function()
+    if not isDragging then
+        uiVisible = not uiVisible
+        if fluentGui then
+            -- Toggle เฉพาะ Fluent window
+            fluentGui.Enabled = uiVisible
+        else
+            -- Fallback: หา GUI ใหม่อีกครั้ง
+            for _, v in ipairs(coreGui:GetChildren()) do
+                if v:IsA("ScreenGui") and v.Name ~= "SCH_Icon" and not preExistingGuis[v] then
+                    fluentGui = v
+                    fluentGui.Enabled = uiVisible
+                end
+            end
+        end
+        -- เปลี่ยนสี icon
+        local activeColor = Color3.fromRGB(0, 200, 255)
+        local dimColor    = Color3.fromRGB(80, 80, 80)
+        stroke.Color      = uiVisible and activeColor or dimColor
+        icon.TextColor3   = uiVisible and activeColor or dimColor
+    end
+    isDragging = false
+    dragStart  = nil
+end)
