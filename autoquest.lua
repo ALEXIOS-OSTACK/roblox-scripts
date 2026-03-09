@@ -254,6 +254,7 @@ end
 -- ==========================================
 -- [ 9. Kill Detector ]
 -- ==========================================
+local KillCount = 0
 local lastTargetHP = math.huge
 task.spawn(function()
     while task.wait(0.2) do
@@ -404,30 +405,6 @@ Fluent:Notify({
 -- ==========================================
 -- [ Floating Toggle Icon ]
 -- ==========================================
--- หา Fluent ScreenGui จาก CoreGui (ใช้วิธีหาที่แน่นอน)
-local function FindFluentGui()
-    for _, v in ipairs(coreGui:GetChildren()) do
-        if v:IsA("ScreenGui") and v.Name ~= "SCH_Icon" then
-            -- Fluent GUI มักมี Frame หลายตัวข้างใน
-            local frames = 0
-            for _, c in ipairs(v:GetChildren()) do
-                if c:IsA("Frame") then frames = frames + 1 end
-            end
-            if frames >= 1 then return v end
-        end
-    end
-    -- Fallback: หาจาก PlayerGui
-    local pg = LocalPlayer:FindFirstChild("PlayerGui")
-    if pg then
-        for _, v in ipairs(pg:GetChildren()) do
-            if v:IsA("ScreenGui") and v.Name ~= "SCH_Icon" then
-                return v
-            end
-        end
-    end
-    return nil
-end
-
 local iconGui = Instance.new("ScreenGui")
 iconGui.Name         = "SCH_Icon"
 iconGui.ResetOnSpawn = false
@@ -456,7 +433,6 @@ stroke.Thickness = 2
 local uiVisible  = true
 local isDragging = false
 local dragStart, iconStartPos
-local fluentGui = FindFluentGui()
 
 icon.InputBegan:Connect(function(input, _processed)
     if input.UserInputType == Enum.UserInputType.MouseButton1
@@ -465,7 +441,6 @@ icon.InputBegan:Connect(function(input, _processed)
         dragStart     = input.Position
         iconStartPos  = icon.Position
 
-        -- ติดตาม input object นี้โดยตรง (ไม่โดน UI อื่นดัก)
         input.Changed:Connect(function()
             if input.UserInputState == Enum.UserInputState.End then
                 dragStart = nil
@@ -493,15 +468,27 @@ local function ToggleUI()
     end
     dragStart = nil
 
-    -- หา GUI ถ้ายังไม่เจอ
+    -- ใช้ fluentGui ที่หาได้จากตอนโหลด (บรรทัด 390)
+    -- ถ้าหายให้หาใหม่
     if not fluentGui or not fluentGui.Parent then
-        fluentGui = FindFluentGui()
+        for _, v in ipairs(coreGui:GetChildren()) do
+            if v:IsA("ScreenGui") and not preExistingGuis[v] and v ~= iconGui then
+                fluentGui = v
+                break
+            end
+        end
     end
 
     uiVisible = not uiVisible
 
     if fluentGui then
-        fluentGui.Enabled = uiVisible
+        -- ซ่อน/แสดง children ทั้งหมดแทนการปิด Enabled
+        -- เพราะบาง Fluent version จะ destroy GUI เมื่อ Enabled = false
+        for _, child in ipairs(fluentGui:GetChildren()) do
+            if child:IsA("GuiObject") then
+                child.Visible = uiVisible
+            end
+        end
     end
 
     local activeColor = Color3.fromRGB(0, 200, 255)
