@@ -17,7 +17,7 @@ _G.FlySpeed      = 150
 _G.MinHP         = 30
 _G.Teleporting   = false
 
-local BossList = {"Zanshi Bing Ren", "Zanshi Huo Ren"}
+local BossList = {"Zanshi Bing Ren", "Zanshi Huo Ren", "Mount Hua Leader"}
 
 -- ==========================================
 -- [ 2. UI Library ]
@@ -33,7 +33,7 @@ local SaveManager    = loadstring(game:HttpGet("https://raw.githubusercontent.co
 local InterfaceManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Addons/InterfaceManager.lua"))()
 
 local Window = Fluent:CreateWindow({
-    Title = "Soul Cultivation Hub",
+    Title = "Private",
     SubTitle = "Auto Farm | v6.0",
     TabWidth = 160,
     Size = UDim2.fromOffset(580, 460),
@@ -76,10 +76,11 @@ local JITTER_RANGE  = 0.08
 local function StopPhysicsFly()
     local hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
     if hrp then
-        for _, name in ipairs({"BypassPosition", "BypassOrientation", "BypassAttachment"}) do
-            local p = hrp:FindFirstChild(name)
-            if p then p:Destroy() end
-        end
+        local pos = hrp:FindFirstChild("BypassPosition")
+        local ori = hrp:FindFirstChild("BypassOrientation")
+        if pos then pos.Enabled = false end
+        if ori then ori.Enabled = false end
+        
         hrp.AssemblyLinearVelocity  = Vector3.zero
         hrp.AssemblyAngularVelocity = Vector3.zero
     end
@@ -96,11 +97,13 @@ local function PhysicsFlyTo(targetCFrame)
     pos.Name = "BypassPosition"; pos.Attachment0 = att
     pos.Mode = Enum.PositionAlignmentMode.OneAttachment
     pos.MaxForce = math.huge; pos.MaxVelocity = _G.FlySpeed; pos.Responsiveness = 200
+    pos.Enabled = true
 
     local ori = hrp:FindFirstChild("BypassOrientation") or Instance.new("AlignOrientation", hrp)
     ori.Name = "BypassOrientation"; ori.Attachment0 = att
     ori.Mode = Enum.OrientationAlignmentMode.OneAttachment
     ori.MaxTorque = math.huge; ori.Responsiveness = 200
+    ori.Enabled = true
 
     pos.Position = targetCFrame.Position
     ori.CFrame   = targetCFrame
@@ -234,12 +237,18 @@ end
 -- Get position of object (supports Model and BasePart)
 local function GetPosition(obj)
     if obj:IsA("Model") then
-        local hrp = obj:FindFirstChild("HumanoidRootPart") or obj:FindFirstChild("Head")
+        local hrp = obj:FindFirstChild("HumanoidRootPart")
         if hrp then return hrp.CFrame end
+        
+        local head = obj:FindFirstChild("Head") 
+        if head then return head.CFrame end
+        
         if obj.PrimaryPart then return obj.PrimaryPart.CFrame end
-        for _, child in ipairs(obj:GetDescendants()) do
-            if child:IsA("BasePart") then return child.CFrame end
-        end
+        
+        -- Fallback fast search (better than GetDescendants)
+        local part = obj:FindFirstChildWhichIsA("BasePart")
+        if part then return part.CFrame end
+        
     elseif obj:IsA("BasePart") then
         return obj.CFrame
     end
@@ -444,16 +453,17 @@ local function GetCurrentTarget()
         for bossName, enabled in pairs(_G.SelectedBosses) do
             if enabled then
                 local b = enemies:FindFirstChild(bossName)
-                if b and b:FindFirstChild("Humanoid") and b.Humanoid.Health > 0
-                   and b:FindFirstChild("HumanoidRootPart") then
-                    return b
+                if b then
+                    local hum = b:FindFirstChild("Humanoid")
+                    if hum and hum.Health > 0 and b:FindFirstChild("HumanoidRootPart") then
+                        return b
+                    end
                 end
             end
         end
-        -- If no boss alive, fall through to regular mobs
     end
 
-    -- Find selected monster
+    -- Find selected monster safely
     if _G.SelectedMonster == "" then return nil end
     for _, e in ipairs(enemies:GetChildren()) do
         if e.Name == _G.SelectedMonster then
@@ -467,29 +477,7 @@ local function GetCurrentTarget()
 end
 
 -- ==========================================
--- [ 10. Kill Detector ]
--- ==========================================
-local KillCount = 0
-local lastTargetHP = math.huge
-task.spawn(function()
-    while task.wait(0.2) do
-        local target = GetCurrentTarget()
-        if target then
-            local hum = target:FindFirstChild("Humanoid")
-            if hum then
-                if hum.Health <= 0 and lastTargetHP > 0 then
-                    KillCount = KillCount + 1
-                end
-                lastTargetHP = hum.Health
-            end
-        else
-            lastTargetHP = math.huge
-        end
-    end
-end)
-
--- ==========================================
--- [ 11. Main Farm Loop ]
+-- [ 10. Main Farm Loop ]
 -- ==========================================
 task.spawn(function()
     while task.wait(0.1 + math.random() * 0.05) do
@@ -571,7 +559,8 @@ end)
 RunService.Stepped:Connect(function()
     local char = LocalPlayer.Character
     local hrp = char and char:FindFirstChild("HumanoidRootPart")
-    local flying = hrp and hrp:FindFirstChild("BypassPosition") ~= nil
+    local pos = hrp and hrp:FindFirstChild("BypassPosition")
+    local flying = pos and pos.Enabled == true
     
     if (_G.AutoFarm or _G.Teleporting) and flying and char then
         for _, p in ipairs(char:GetDescendants()) do
