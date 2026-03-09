@@ -330,42 +330,20 @@ Tabs.Teleport:AddButton({
             and targetCF * CFrame.new(0, 0, 5)
             or targetCF
 
-        _G.Teleporting = true
-        Fluent:Notify({
-            Title = "Teleporting",
-            Content = "Flying to " .. selectedTarget .. "...",
-            Duration = 3
-        })
-
-        task.spawn(function()
-            while _G.Teleporting do
-                local hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-                if not hrp then break end
-                local dist = (hrp.Position - destination.Position).Magnitude
-                if dist < 10 then
-                    StopPhysicsFly()
-                    _G.Teleporting = false
-                    Fluent:Notify({ Title = "Arrived", Content = "Reached " .. selectedTarget, Duration = 3 })
-                    break
-                end
-                PhysicsFlyTo(destination)
-                task.wait(0.1)
-            end
-        end)
+        local char = LocalPlayer.Character
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        if hrp then
+            hrp.CFrame = destination
+            Fluent:Notify({
+                Title = "Teleported",
+                Content = "Teleported to " .. selectedTarget,
+                Duration = 3
+            })
+        end
     end
 })
 
--- Stop + Refresh
-Tabs.Teleport:AddButton({
-    Title = "Stop Teleport",
-    Description = "Stop flying immediately.",
-    Callback = function()
-        _G.Teleporting = false
-        StopPhysicsFly()
-        Fluent:Notify({ Title = "Stopped", Content = "Teleport cancelled.", Duration = 2 })
-    end
-})
-
+-- Refresh Targets
 Tabs.Teleport:AddButton({
     Title = "Refresh Targets",
     Description = "Re-scan targets for current category.",
