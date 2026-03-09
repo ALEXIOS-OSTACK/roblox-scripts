@@ -482,13 +482,7 @@ local function ToggleUI()
     uiVisible = not uiVisible
 
     if fluentGui then
-        -- ซ่อน/แสดง children ทั้งหมดแทนการปิด Enabled
-        -- เพราะบาง Fluent version จะ destroy GUI เมื่อ Enabled = false
-        for _, child in ipairs(fluentGui:GetChildren()) do
-            if child:IsA("GuiObject") then
-                child.Visible = uiVisible
-            end
-        end
+        fluentGui.Enabled = uiVisible
     end
 
     local activeColor = Color3.fromRGB(0, 200, 255)
