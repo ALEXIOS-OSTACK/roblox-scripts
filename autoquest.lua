@@ -44,9 +44,9 @@ local Window = Fluent:CreateWindow({
 
 local Tabs = {
     Farm     = Window:AddTab({ Title = "Farm",     Icon = "swords" }),
-    Settings = Window:AddTab({ Title = "Settings", Icon = "settings" }),
-    Config   = Window:AddTab({ Title = "Save",     Icon = "save" }),
     Misc     = Window:AddTab({ Title = "Misc",     Icon = "box" }),
+    Settings = Window:AddTab({ Title = "Config",   Icon = "settings" }),
+    Config   = Window:AddTab({ Title = "Setting",  Icon = "save" }),
 }
 
 -- ==========================================
@@ -404,6 +404,30 @@ Fluent:Notify({
 -- ==========================================
 -- [ Floating Toggle Icon ]
 -- ==========================================
+-- หา Fluent ScreenGui จาก CoreGui (ใช้วิธีหาที่แน่นอน)
+local function FindFluentGui()
+    for _, v in ipairs(coreGui:GetChildren()) do
+        if v:IsA("ScreenGui") and v.Name ~= "SCH_Icon" then
+            -- Fluent GUI มักมี Frame หลายตัวข้างใน
+            local frames = 0
+            for _, c in ipairs(v:GetChildren()) do
+                if c:IsA("Frame") then frames = frames + 1 end
+            end
+            if frames >= 1 then return v end
+        end
+    end
+    -- Fallback: หาจาก PlayerGui
+    local pg = LocalPlayer:FindFirstChild("PlayerGui")
+    if pg then
+        for _, v in ipairs(pg:GetChildren()) do
+            if v:IsA("ScreenGui") and v.Name ~= "SCH_Icon" then
+                return v
+            end
+        end
+    end
+    return nil
+end
+
 local iconGui = Instance.new("ScreenGui")
 iconGui.Name         = "SCH_Icon"
 iconGui.ResetOnSpawn = false
@@ -432,49 +456,59 @@ stroke.Thickness = 2
 local uiVisible  = true
 local isDragging = false
 local dragStart, iconStartPos
+local fluentGui = FindFluentGui()
 
-icon.InputBegan:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+icon.InputBegan:Connect(function(input, _processed)
+    if input.UserInputType == Enum.UserInputType.MouseButton1
+       or input.UserInputType == Enum.UserInputType.Touch then
         isDragging    = false
         dragStart     = input.Position
         iconStartPos  = icon.Position
-    end
-end)
 
-UserInputService.InputChanged:Connect(function(input)
-    if dragStart and input.UserInputType == Enum.UserInputType.MouseMovement then
-        local delta = input.Position - dragStart
-        if delta.Magnitude > 6 then
-            isDragging = true
-            icon.Position = UDim2.new(
-                iconStartPos.X.Scale, iconStartPos.X.Offset + delta.X,
-                iconStartPos.Y.Scale, iconStartPos.Y.Offset + delta.Y
-            )
-        end
-    end
-end)
-
-icon.MouseButton1Up:Connect(function()
-    if not isDragging then
-        uiVisible = not uiVisible
-        if fluentGui then
-            -- Toggle เฉพาะ Fluent window
-            fluentGui.Enabled = uiVisible
-        else
-            -- Fallback: หา GUI ใหม่อีกครั้ง
-            for _, v in ipairs(coreGui:GetChildren()) do
-                if v:IsA("ScreenGui") and v.Name ~= "SCH_Icon" and not preExistingGuis[v] then
-                    fluentGui = v
-                    fluentGui.Enabled = uiVisible
+        -- ติดตาม input object นี้โดยตรง (ไม่โดน UI อื่นดัก)
+        input.Changed:Connect(function()
+            if input.UserInputState == Enum.UserInputState.End then
+                dragStart = nil
+                return
+            end
+            if dragStart then
+                local delta = input.Position - dragStart
+                if delta.Magnitude > 6 then
+                    isDragging = true
+                    icon.Position = UDim2.new(
+                        iconStartPos.X.Scale, iconStartPos.X.Offset + delta.X,
+                        iconStartPos.Y.Scale, iconStartPos.Y.Offset + delta.Y
+                    )
                 end
             end
-        end
-        -- เปลี่ยนสี icon
-        local activeColor = Color3.fromRGB(0, 200, 255)
-        local dimColor    = Color3.fromRGB(80, 80, 80)
-        stroke.Color      = uiVisible and activeColor or dimColor
-        icon.TextColor3   = uiVisible and activeColor or dimColor
+        end)
     end
-    isDragging = false
-    dragStart  = nil
 end)
+
+local function ToggleUI()
+    if isDragging then
+        isDragging = false
+        dragStart  = nil
+        return
+    end
+    dragStart = nil
+
+    -- หา GUI ถ้ายังไม่เจอ
+    if not fluentGui or not fluentGui.Parent then
+        fluentGui = FindFluentGui()
+    end
+
+    uiVisible = not uiVisible
+
+    if fluentGui then
+        fluentGui.Enabled = uiVisible
+    end
+
+    local activeColor = Color3.fromRGB(0, 200, 255)
+    local dimColor    = Color3.fromRGB(80, 80, 80)
+    stroke.Color      = uiVisible and activeColor or dimColor
+    icon.TextColor3   = uiVisible and activeColor or dimColor
+end
+
+icon.MouseButton1Up:Connect(ToggleUI)
+icon.TouchTap:Connect(ToggleUI)
