@@ -565,7 +565,7 @@ RunService.Stepped:Connect(function()
     local char = LocalPlayer.Character
     local hrp = char and char:FindFirstChild("HumanoidRootPart")
     local flying = hrp and hrp:FindFirstChild("BypassPosition") ~= nil
-    if _G.AutoFarm and flying and char then
+    if (_G.AutoFarm or _G.Teleporting) and flying and char then
         for _, p in ipairs(char:GetChildren()) do
             if p:IsA("BasePart") then p.CanCollide = false end
         end
