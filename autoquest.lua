@@ -15,13 +15,13 @@ _G.SelectedMonster = ""
 _G.FarmPosition  = "Behind"
 _G.FlySpeed      = 150
 _G.MinHP         = 30
+_G.Teleporting   = false
 
 local BossList = {"Zanshi Bing Ren", "Zanshi Huo Ren"}
 
 -- ==========================================
 -- [ 2. UI Library ]
 -- ==========================================
--- บันทึก ScreenGui ที่มีอยู่ก่อน Fluent โหลด (เพื่อหา Fluent GUI ทีหลัง)
 local coreGui = game:GetService("CoreGui")
 local preExistingGuis = {}
 for _, v in ipairs(coreGui:GetChildren()) do
@@ -68,7 +68,65 @@ local function GetMonsterList()
 end
 
 -- ==========================================
--- [ 4. Farm Tab UI ]
+-- [ 4. Physics Fly Engine ]
+-- ==========================================
+local BASE_COOLDOWN = 0.18
+local JITTER_RANGE  = 0.08
+
+local function StopPhysicsFly()
+    local hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+    if hrp then
+        for _, name in ipairs({"BypassPosition", "BypassOrientation", "BypassAttachment"}) do
+            local p = hrp:FindFirstChild(name)
+            if p then p:Destroy() end
+        end
+        hrp.AssemblyLinearVelocity  = Vector3.zero
+        hrp.AssemblyAngularVelocity = Vector3.zero
+    end
+end
+
+local function PhysicsFlyTo(targetCFrame)
+    local hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+
+    local att = hrp:FindFirstChild("BypassAttachment") or Instance.new("Attachment", hrp)
+    att.Name = "BypassAttachment"
+
+    local pos = hrp:FindFirstChild("BypassPosition") or Instance.new("AlignPosition", hrp)
+    pos.Name = "BypassPosition"; pos.Attachment0 = att
+    pos.Mode = Enum.PositionAlignmentMode.OneAttachment
+    pos.MaxForce = math.huge; pos.MaxVelocity = _G.FlySpeed; pos.Responsiveness = 200
+
+    local ori = hrp:FindFirstChild("BypassOrientation") or Instance.new("AlignOrientation", hrp)
+    ori.Name = "BypassOrientation"; ori.Attachment0 = att
+    ori.Mode = Enum.OrientationAlignmentMode.OneAttachment
+    ori.MaxTorque = math.huge; ori.Responsiveness = 200
+
+    pos.Position = targetCFrame.Position
+    ori.CFrame   = targetCFrame
+end
+
+local lastAttackTime = 0
+local function SafeAttack()
+    local now = tick()
+    local cooldown = BASE_COOLDOWN + math.random() * JITTER_RANGE
+    if now - lastAttackTime < cooldown then return end
+    lastAttackTime = now
+
+    local char = LocalPlayer.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    if not char or not hrp then return end
+
+    pcall(function()
+        local tool = char:FindFirstChild("Light") or LocalPlayer.Backpack:FindFirstChild("Light")
+        if not tool then return end
+        LocalPlayer.PlayerGui.Inventory.Manager.Toolbar:FireServer(1, tool)
+        ReplicatedStorage.RemoteEvents.Attack:FireServer("Light", { ["RootPart"] = hrp })
+    end)
+end
+
+-- ==========================================
+-- [ 5. Farm Tab UI ]
 -- ==========================================
 Tabs.Farm:AddParagraph({ Title = "Farm Controls", Content = "Pick a target, choose a position, then start." })
 
@@ -129,40 +187,9 @@ Tabs.Farm:AddButton({
 })
 
 -- ==========================================
--- ==========================================
-local FlySlider = Tabs.Settings:AddSlider("FlySpeed", {
-    Title = "Fly Speed",
-    Default = 150, Min = 50, Max = 500, Rounding = 0
-})
-FlySlider:OnChanged(function(v) _G.FlySpeed = v end)
-
-local AttackSlider = Tabs.Settings:AddSlider("AttackRate", {
-    Title = "Attack Speed (ms)",
-    Description = "Higher = slower = safer",
-    Default = 18, Min = 10, Max = 100, Rounding = 0
-})
-
-local HPSlider = Tabs.Settings:AddSlider("MinHP", {
-    Title = "Safety HP (%)",
-    Description = "Stop farming below this HP. Set 0 to disable.",
-    Default = 30, Min = 0, Max = 90, Rounding = 0
-})
-HPSlider:OnChanged(function(v) _G.MinHP = v end)
-
-local AntiAFKToggle = Tabs.Misc:AddToggle("AntiAFK", { Title = "Anti-AFK", Default = true })
-
-local AntiPlayerToggle = Tabs.Misc:AddToggle("AntiPlayer", { 
-    Title = "Anti-Player", 
-    Description = "Auto-kick yourself if anyone else joins the server to avoid admins.",
-    Default = false 
-})
-
--- ==========================================
 -- [ 6. Teleport Tab ]
 -- ==========================================
-_G.Teleporting = false
-
--- สแกน NPC
+-- Scan NPCs
 local function GetNPCList()
     local names = {}
     local npcFolder = workspace:FindFirstChild("NPCs")
@@ -179,7 +206,7 @@ local function GetNPCList()
     return names
 end
 
--- สแกน Training Zones
+-- Scan Training Zones
 local function GetZoneList(subFolder)
     local names = {}
     local tz = workspace:FindFirstChild("Training Zones")
@@ -197,13 +224,12 @@ local function GetZoneList(subFolder)
     return names
 end
 
--- หาตำแหน่งของ object (รองรับ Model และ BasePart)
+-- Get position of object (supports Model and BasePart)
 local function GetPosition(obj)
     if obj:IsA("Model") then
         local hrp = obj:FindFirstChild("HumanoidRootPart") or obj:FindFirstChild("Head")
         if hrp then return hrp.CFrame end
         if obj.PrimaryPart then return obj.PrimaryPart.CFrame end
-        -- fallback: หา BasePart แรก
         for _, child in ipairs(obj:GetDescendants()) do
             if child:IsA("BasePart") then return child.CFrame end
         end
@@ -213,9 +239,9 @@ local function GetPosition(obj)
     return nil
 end
 
-Tabs.Teleport:AddParagraph({ Title = "Teleport", Content = "เลือกหมวด → เลือกเป้าหมาย → กด Teleport" })
+Tabs.Teleport:AddParagraph({ Title = "Teleport", Content = "Select category, pick target, then teleport." })
 
--- === Category Dropdown ===
+-- Category Dropdown
 local selectedCategory = "NPC"
 local selectedTarget = ""
 
@@ -230,7 +256,6 @@ local function GetTargetsForCategory(category)
     return {}
 end
 
--- สร้าง Target Dropdown ก่อน (จะอัพเดตทีหลัง)
 local initTargets = GetNPCList()
 if #initTargets == 0 then initTargets = {"(None Found)"} end
 selectedTarget = initTargets[1]
@@ -242,7 +267,7 @@ local TargetDropdown = Tabs.Teleport:AddDropdown("TargetDropdown", {
 })
 TargetDropdown:OnChanged(function(v) selectedTarget = v end)
 
--- ฟังก์ชันอัพเดต Target dropdown ตาม Category
+-- Update target list when category changes
 local function UpdateTargets()
     local targets = GetTargetsForCategory(selectedCategory)
     if #targets == 0 then targets = {"(None Found)"} end
@@ -255,7 +280,7 @@ end
 
 local CategoryDropdown = Tabs.Teleport:AddDropdown("CategoryDropdown", {
     Title = "Category",
-    Description = "เลือกหมวดที่ต้องการ Teleport ไป",
+    Description = "Select teleport category.",
     Values = {"NPC", "Qi", "Training"},
     Default = 1,
 })
@@ -264,17 +289,17 @@ CategoryDropdown:OnChanged(function(v)
     UpdateTargets()
 end)
 
--- === Teleport Button ===
+-- Teleport Button
 Tabs.Teleport:AddButton({
     Title = "Teleport",
-    Description = "บินไปยังเป้าหมายที่เลือก",
+    Description = "Fly to selected target.",
     Callback = function()
         if selectedTarget == "(None Found)" or selectedTarget == "" then
             Fluent:Notify({ Title = "Error", Content = "No target selected.", Duration = 2 })
             return
         end
 
-        -- หา object ตาม category
+        -- Find object by category
         local targetObj = nil
         if selectedCategory == "NPC" then
             local folder = workspace:FindFirstChild("NPCs")
@@ -300,7 +325,7 @@ Tabs.Teleport:AddButton({
             return
         end
 
-        -- NPC offset ด้านหน้าเล็กน้อย / Zone ตรงจุด
+        -- NPC: offset in front / Zone: exact position
         local destination = selectedCategory == "NPC"
             and targetCF * CFrame.new(0, 0, 5)
             or targetCF
@@ -330,10 +355,10 @@ Tabs.Teleport:AddButton({
     end
 })
 
--- === Stop + Refresh ===
+-- Stop + Refresh
 Tabs.Teleport:AddButton({
     Title = "Stop Teleport",
-    Description = "หยุดบินทันที",
+    Description = "Stop flying immediately.",
     Callback = function()
         _G.Teleporting = false
         StopPhysicsFly()
@@ -343,7 +368,7 @@ Tabs.Teleport:AddButton({
 
 Tabs.Teleport:AddButton({
     Title = "Refresh Targets",
-    Description = "สแกนหาเป้าหมายใหม่",
+    Description = "Re-scan targets for current category.",
     Callback = function()
         UpdateTargets()
         local targets = GetTargetsForCategory(selectedCategory)
@@ -355,75 +380,48 @@ Tabs.Teleport:AddButton({
     end
 })
 
-
-
 -- ==========================================
--- [ 7. Anti-Cheat Bypass Engine ]
+-- [ 7. Settings Tab ]
 -- ==========================================
-local BASE_COOLDOWN = 0.18
-local JITTER_RANGE  = 0.08
+local FlySlider = Tabs.Settings:AddSlider("FlySpeed", {
+    Title = "Fly Speed",
+    Default = 150, Min = 50, Max = 500, Rounding = 0
+})
+FlySlider:OnChanged(function(v) _G.FlySpeed = v end)
+
+local AttackSlider = Tabs.Settings:AddSlider("AttackRate", {
+    Title = "Attack Speed (ms)",
+    Description = "Higher = slower = safer",
+    Default = 18, Min = 10, Max = 100, Rounding = 0
+})
 AttackSlider:OnChanged(function(v) BASE_COOLDOWN = v / 1000 end)
 
-local function StopPhysicsFly()
-    local hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-    if hrp then
-        for _, name in ipairs({"BypassPosition", "BypassOrientation", "BypassAttachment"}) do
-            local p = hrp:FindFirstChild(name)
-            if p then p:Destroy() end
-        end
-        hrp.AssemblyLinearVelocity  = Vector3.zero
-        hrp.AssemblyAngularVelocity = Vector3.zero
-    end
-end
-
-local function PhysicsFlyTo(targetCFrame)
-    local hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-    if not hrp then return end
-
-    local att = hrp:FindFirstChild("BypassAttachment") or Instance.new("Attachment", hrp)
-    att.Name = "BypassAttachment"
-
-    local pos = hrp:FindFirstChild("BypassPosition") or Instance.new("AlignPosition", hrp)
-    pos.Name = "BypassPosition"; pos.Attachment0 = att
-    pos.Mode = Enum.PositionAlignmentMode.OneAttachment
-    pos.MaxForce = math.huge; pos.MaxVelocity = _G.FlySpeed; pos.Responsiveness = 200
-
-    local ori = hrp:FindFirstChild("BypassOrientation") or Instance.new("AlignOrientation", hrp)
-    ori.Name = "BypassOrientation"; ori.Attachment0 = att
-    ori.Mode = Enum.OrientationAlignmentMode.OneAttachment
-    ori.MaxTorque = math.huge; ori.Responsiveness = 200
-
-    pos.Position = targetCFrame.Position
-    ori.CFrame   = targetCFrame
-end
-
-local lastAttackTime = 0
-local function SafeAttack()
-    local now = tick()
-    local cooldown = BASE_COOLDOWN + math.random() * JITTER_RANGE
-    if now - lastAttackTime < cooldown then return end
-    lastAttackTime = now
-
-    local char = LocalPlayer.Character
-    local hrp = char and char:FindFirstChild("HumanoidRootPart")
-    if not char or not hrp then return end
-
-    pcall(function()
-        local tool = char:FindFirstChild("Light") or LocalPlayer.Backpack:FindFirstChild("Light")
-        if not tool then return end
-        LocalPlayer.PlayerGui.Inventory.Manager.Toolbar:FireServer(1, tool)
-        ReplicatedStorage.RemoteEvents.Attack:FireServer("Light", { ["RootPart"] = hrp })
-    end)
-end
+local HPSlider = Tabs.Settings:AddSlider("MinHP", {
+    Title = "Safety HP (%)",
+    Description = "Stop farming below this HP. Set 0 to disable.",
+    Default = 30, Min = 0, Max = 90, Rounding = 0
+})
+HPSlider:OnChanged(function(v) _G.MinHP = v end)
 
 -- ==========================================
--- [ 8. Target Finder (Boss Priority Fixed) ]
+-- [ 8. Misc Tab ]
+-- ==========================================
+local AntiAFKToggle = Tabs.Misc:AddToggle("AntiAFK", { Title = "Anti-AFK", Default = true })
+
+local AntiPlayerToggle = Tabs.Misc:AddToggle("AntiPlayer", { 
+    Title = "Anti-Player", 
+    Description = "Auto-kick yourself if anyone else joins the server to avoid admins.",
+    Default = false 
+})
+
+-- ==========================================
+-- [ 9. Target Finder ]
 -- ==========================================
 local function GetCurrentTarget()
     local enemies = workspace:FindFirstChild("Enemies")
     if not enemies then return nil end
 
-    -- Boss Priority: ถ้าเปิด BossPriority จะหาบอสก่อน
+    -- Boss Priority: search for bosses first
     if _G.BossPriority then
         for bossName, enabled in pairs(_G.SelectedBosses) do
             if enabled then
@@ -434,10 +432,10 @@ local function GetCurrentTarget()
                 end
             end
         end
-        -- ถ้าบอสตาย/ไม่มี ก็ fall through ไปหามอนปกติ
+        -- If no boss alive, fall through to regular mobs
     end
 
-    -- หามอนที่เลือก
+    -- Find selected monster
     if _G.SelectedMonster == "" then return nil end
     for _, e in ipairs(enemies:GetChildren()) do
         if e.Name == _G.SelectedMonster then
@@ -451,7 +449,7 @@ local function GetCurrentTarget()
 end
 
 -- ==========================================
--- [ 9. Kill Detector ]
+-- [ 10. Kill Detector ]
 -- ==========================================
 local KillCount = 0
 local lastTargetHP = math.huge
@@ -473,7 +471,7 @@ task.spawn(function()
 end)
 
 -- ==========================================
--- [ 10. Main Farm Loop ]
+-- [ 11. Main Farm Loop ]
 -- ==========================================
 task.spawn(function()
     while task.wait(0.1 + math.random() * 0.05) do
@@ -506,7 +504,7 @@ task.spawn(function()
             if target and hrp then
                 local targetRoot = target.HumanoidRootPart
 
-                -- คำนวณ standPos ตามตำแหน่งที่เลือก
+                -- Calculate stand position
                 local offset
                 if _G.FarmPosition == "On Head" then
                     offset = CFrame.new(0, 4, 0)
@@ -533,7 +531,7 @@ task.spawn(function()
 end)
 
 -- ==========================================
--- [ 11. Background Services ]
+-- [ 12. Background Services ]
 -- ==========================================
 -- Anti-Player (Kick if someone else joins)
 game:GetService("Players").PlayerAdded:Connect(function(player)
@@ -551,7 +549,7 @@ task.spawn(function()
     end
 end)
 
--- Safe Noclip (เฉพาะตอน Physics Fly)
+-- Safe Noclip (only during Physics Fly)
 RunService.Stepped:Connect(function()
     local char = LocalPlayer.Character
     local hrp = char and char:FindFirstChild("HumanoidRootPart")
@@ -572,7 +570,7 @@ LocalPlayer.Idled:Connect(function()
 end)
 
 -- ==========================================
--- [ 12. Save Manager ]
+-- [ 13. Save Manager ]
 -- ==========================================
 SaveManager:SetLibrary(Fluent)
 InterfaceManager:SetLibrary(Fluent)
@@ -593,7 +591,7 @@ Fluent:Notify({
 })
 
 -- ==========================================
--- [ Floating Toggle Icon (ใช้ Window:Minimize) ]
+-- [ 14. Floating Toggle Icon ]
 -- ==========================================
 local iconGui = Instance.new("ScreenGui")
 iconGui.Name         = "SCH_Icon"
@@ -659,11 +657,10 @@ local function ToggleUI()
         return
     end
 
-    -- ใช้ Fluent built-in API โดยตรง
-    -- Window:Minimize() จะ toggle Window.Minimized และ Window.Root.Visible
+    -- Use Fluent built-in minimize API
     Window:Minimize()
 
-    -- อัพเดต icon color ตามสถานะ
+    -- Update icon color based on state
     local isOpen = not Window.Minimized
     local activeColor = Color3.fromRGB(0, 200, 255)
     local dimColor    = Color3.fromRGB(80, 80, 80)
