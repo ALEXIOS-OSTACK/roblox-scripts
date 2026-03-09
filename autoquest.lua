@@ -213,37 +213,105 @@ local function GetPosition(obj)
     return nil
 end
 
-Tabs.Teleport:AddParagraph({ Title = "Teleport", Content = "เลือกเป้าหมายแล้วกด Teleport เพื่อบินไป" })
+Tabs.Teleport:AddParagraph({ Title = "Teleport", Content = "เลือกหมวด → เลือกเป้าหมาย → กด Teleport" })
 
--- === NPC Section ===
-local npcList = GetNPCList()
-if #npcList == 0 then npcList = {"(No NPCs Found)"} end
-local selectedNPC = npcList[1]
+-- === Category Dropdown ===
+local selectedCategory = "NPC"
+local selectedTarget = ""
 
-local NPCDropdown = Tabs.Teleport:AddDropdown("NPCDropdown", {
-    Title = "NPC",
-    Values = npcList,
+local function GetTargetsForCategory(category)
+    if category == "NPC" then
+        return GetNPCList()
+    elseif category == "Qi" then
+        return GetZoneList("Qi")
+    elseif category == "Training" then
+        return GetZoneList("Training")
+    end
+    return {}
+end
+
+-- สร้าง Target Dropdown ก่อน (จะอัพเดตทีหลัง)
+local initTargets = GetNPCList()
+if #initTargets == 0 then initTargets = {"(None Found)"} end
+selectedTarget = initTargets[1]
+
+local TargetDropdown = Tabs.Teleport:AddDropdown("TargetDropdown", {
+    Title = "Target",
+    Values = initTargets,
     Default = 1,
 })
-NPCDropdown:OnChanged(function(v) selectedNPC = v end)
+TargetDropdown:OnChanged(function(v) selectedTarget = v end)
 
+-- ฟังก์ชันอัพเดต Target dropdown ตาม Category
+local function UpdateTargets()
+    local targets = GetTargetsForCategory(selectedCategory)
+    if #targets == 0 then targets = {"(None Found)"} end
+    pcall(function()
+        TargetDropdown:SetValues(targets)
+        TargetDropdown:SetValue(targets[1])
+    end)
+    selectedTarget = targets[1]
+end
+
+local CategoryDropdown = Tabs.Teleport:AddDropdown("CategoryDropdown", {
+    Title = "Category",
+    Description = "เลือกหมวดที่ต้องการ Teleport ไป",
+    Values = {"NPC", "Qi", "Training"},
+    Default = 1,
+})
+CategoryDropdown:OnChanged(function(v)
+    selectedCategory = v
+    UpdateTargets()
+end)
+
+-- === Teleport Button ===
 Tabs.Teleport:AddButton({
-    Title = "Teleport to NPC",
+    Title = "Teleport",
+    Description = "บินไปยังเป้าหมายที่เลือก",
     Callback = function()
-        if selectedNPC == "(No NPCs Found)" then return end
-        local npcFolder = workspace:FindFirstChild("NPCs")
-        if not npcFolder then return end
-        local npc = npcFolder:FindFirstChild(selectedNPC)
-        if not npc then
-            Fluent:Notify({ Title = "Error", Content = "NPC '" .. selectedNPC .. "' not found.", Duration = 3 })
+        if selectedTarget == "(None Found)" or selectedTarget == "" then
+            Fluent:Notify({ Title = "Error", Content = "No target selected.", Duration = 2 })
             return
         end
-        local targetCF = GetPosition(npc)
-        if not targetCF then return end
-        -- บินไปใกล้ NPC (offset ด้านหน้า)
-        local destination = targetCF * CFrame.new(0, 0, 5)
+
+        -- หา object ตาม category
+        local targetObj = nil
+        if selectedCategory == "NPC" then
+            local folder = workspace:FindFirstChild("NPCs")
+            if folder then targetObj = folder:FindFirstChild(selectedTarget) end
+        elseif selectedCategory == "Qi" then
+            local tz = workspace:FindFirstChild("Training Zones")
+            local folder = tz and tz:FindFirstChild("Qi")
+            if folder then targetObj = folder:FindFirstChild(selectedTarget) end
+        elseif selectedCategory == "Training" then
+            local tz = workspace:FindFirstChild("Training Zones")
+            local folder = tz and tz:FindFirstChild("Training")
+            if folder then targetObj = folder:FindFirstChild(selectedTarget) end
+        end
+
+        if not targetObj then
+            Fluent:Notify({ Title = "Error", Content = "'" .. selectedTarget .. "' not found.", Duration = 3 })
+            return
+        end
+
+        local targetCF = GetPosition(targetObj)
+        if not targetCF then
+            Fluent:Notify({ Title = "Error", Content = "Can't get position.", Duration = 3 })
+            return
+        end
+
+        -- NPC offset ด้านหน้าเล็กน้อย / Zone ตรงจุด
+        local destination = selectedCategory == "NPC"
+            and targetCF * CFrame.new(0, 0, 5)
+            or targetCF
+
         _G.Teleporting = true
-        Fluent:Notify({ Title = "Teleporting", Content = "Flying to " .. selectedNPC .. "...", Duration = 3 })
+        Fluent:Notify({
+            Title = "Teleporting",
+            Content = "Flying to " .. selectedTarget .. "...",
+            Duration = 3
+        })
+
         task.spawn(function()
             while _G.Teleporting do
                 local hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
@@ -252,7 +320,7 @@ Tabs.Teleport:AddButton({
                 if dist < 10 then
                     StopPhysicsFly()
                     _G.Teleporting = false
-                    Fluent:Notify({ Title = "Arrived", Content = "Reached " .. selectedNPC, Duration = 3 })
+                    Fluent:Notify({ Title = "Arrived", Content = "Reached " .. selectedTarget, Duration = 3 })
                     break
                 end
                 PhysicsFlyTo(destination)
@@ -262,99 +330,7 @@ Tabs.Teleport:AddButton({
     end
 })
 
--- === Qi Zone Section ===
-local qiList = GetZoneList("Qi")
-if #qiList == 0 then qiList = {"(No Qi Zones Found)"} end
-local selectedQi = qiList[1]
-
-local QiDropdown = Tabs.Teleport:AddDropdown("QiDropdown", {
-    Title = "Qi Zone",
-    Values = qiList,
-    Default = 1,
-})
-QiDropdown:OnChanged(function(v) selectedQi = v end)
-
-Tabs.Teleport:AddButton({
-    Title = "Teleport to Qi Zone",
-    Callback = function()
-        if selectedQi == "(No Qi Zones Found)" then return end
-        local tz = workspace:FindFirstChild("Training Zones")
-        local qiFolder = tz and tz:FindFirstChild("Qi")
-        if not qiFolder then return end
-        local zone = qiFolder:FindFirstChild(selectedQi)
-        if not zone then
-            Fluent:Notify({ Title = "Error", Content = "Zone '" .. selectedQi .. "' not found.", Duration = 3 })
-            return
-        end
-        local targetCF = GetPosition(zone)
-        if not targetCF then return end
-        _G.Teleporting = true
-        Fluent:Notify({ Title = "Teleporting", Content = "Flying to Qi: " .. selectedQi .. "...", Duration = 3 })
-        task.spawn(function()
-            while _G.Teleporting do
-                local hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-                if not hrp then break end
-                local dist = (hrp.Position - targetCF.Position).Magnitude
-                if dist < 10 then
-                    StopPhysicsFly()
-                    _G.Teleporting = false
-                    Fluent:Notify({ Title = "Arrived", Content = "Reached Qi: " .. selectedQi, Duration = 3 })
-                    break
-                end
-                PhysicsFlyTo(targetCF)
-                task.wait(0.1)
-            end
-        end)
-    end
-})
-
--- === Training Zone Section ===
-local trainList = GetZoneList("Training")
-if #trainList == 0 then trainList = {"(No Training Zones Found)"} end
-local selectedTrain = trainList[1]
-
-local TrainDropdown = Tabs.Teleport:AddDropdown("TrainDropdown", {
-    Title = "Training Zone",
-    Values = trainList,
-    Default = 1,
-})
-TrainDropdown:OnChanged(function(v) selectedTrain = v end)
-
-Tabs.Teleport:AddButton({
-    Title = "Teleport to Training Zone",
-    Callback = function()
-        if selectedTrain == "(No Training Zones Found)" then return end
-        local tz = workspace:FindFirstChild("Training Zones")
-        local trainFolder = tz and tz:FindFirstChild("Training")
-        if not trainFolder then return end
-        local zone = trainFolder:FindFirstChild(selectedTrain)
-        if not zone then
-            Fluent:Notify({ Title = "Error", Content = "Zone '" .. selectedTrain .. "' not found.", Duration = 3 })
-            return
-        end
-        local targetCF = GetPosition(zone)
-        if not targetCF then return end
-        _G.Teleporting = true
-        Fluent:Notify({ Title = "Teleporting", Content = "Flying to Train: " .. selectedTrain .. "...", Duration = 3 })
-        task.spawn(function()
-            while _G.Teleporting do
-                local hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-                if not hrp then break end
-                local dist = (hrp.Position - targetCF.Position).Magnitude
-                if dist < 10 then
-                    StopPhysicsFly()
-                    _G.Teleporting = false
-                    Fluent:Notify({ Title = "Arrived", Content = "Reached Train: " .. selectedTrain, Duration = 3 })
-                    break
-                end
-                PhysicsFlyTo(targetCF)
-                task.wait(0.1)
-            end
-        end)
-    end
-})
-
--- === ปุ่มหยุด Teleport + Refresh ===
+-- === Stop + Refresh ===
 Tabs.Teleport:AddButton({
     Title = "Stop Teleport",
     Description = "หยุดบินทันที",
@@ -366,27 +342,14 @@ Tabs.Teleport:AddButton({
 })
 
 Tabs.Teleport:AddButton({
-    Title = "Refresh All Lists",
-    Description = "สแกนหา NPC และ Zone ใหม่",
+    Title = "Refresh Targets",
+    Description = "สแกนหาเป้าหมายใหม่",
     Callback = function()
-        local newNPC = GetNPCList()
-        if #newNPC == 0 then newNPC = {"(No NPCs Found)"} end
-        pcall(function() NPCDropdown:SetValues(newNPC) NPCDropdown:SetValue(newNPC[1]) end)
-        selectedNPC = newNPC[1]
-
-        local newQi = GetZoneList("Qi")
-        if #newQi == 0 then newQi = {"(No Qi Zones Found)"} end
-        pcall(function() QiDropdown:SetValues(newQi) QiDropdown:SetValue(newQi[1]) end)
-        selectedQi = newQi[1]
-
-        local newTrain = GetZoneList("Training")
-        if #newTrain == 0 then newTrain = {"(No Training Zones Found)"} end
-        pcall(function() TrainDropdown:SetValues(newTrain) TrainDropdown:SetValue(newTrain[1]) end)
-        selectedTrain = newTrain[1]
-
+        UpdateTargets()
+        local targets = GetTargetsForCategory(selectedCategory)
         Fluent:Notify({
             Title = "Refreshed",
-            Content = "NPCs: " .. #newNPC .. " | Qi: " .. #newQi .. " | Train: " .. #newTrain,
+            Content = selectedCategory .. ": " .. #targets .. " target(s) found.",
             Duration = 3
         })
     end
