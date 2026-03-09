@@ -333,7 +333,27 @@ Tabs.Teleport:AddButton({
         local char = LocalPlayer.Character
         local hrp = char and char:FindFirstChild("HumanoidRootPart")
         if hrp then
+            if _G.AutoFarm then
+                _G.AutoFarm = false
+                pcall(function() FarmToggle:SetValue(false) end)
+            end
+            StopPhysicsFly()
+            
+            -- รีเซ็ตค่าแรงเฉื่อย/ฟิสิกส์ทั้งหมดให้เป็น 0 ก่อนย้าย
+            hrp.AssemblyLinearVelocity = Vector3.zero
+            hrp.AssemblyAngularVelocity = Vector3.zero
+            
+            -- บังคับวาร์ปแบบทันที
             hrp.CFrame = destination
+            
+            -- รีเซ็ตอีกรอบเผื่อค้าง
+            task.delay(0.05, function()
+                if hrp then
+                    hrp.AssemblyLinearVelocity = Vector3.zero
+                    hrp.AssemblyAngularVelocity = Vector3.zero
+                end
+            end)
+
             Fluent:Notify({
                 Title = "Teleported",
                 Content = "Teleported to " .. selectedTarget,
