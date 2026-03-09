@@ -535,13 +535,13 @@ end)
 -- ==========================================
 -- Anti-Player (Kick if someone else joins)
 game:GetService("Players").PlayerAdded:Connect(function(player)
-    if Tabs.Misc:GetToggle("AntiPlayer") and Tabs.Misc:GetToggle("AntiPlayer").Value then
+    if Fluent.Options.AntiPlayer and Fluent.Options.AntiPlayer.Value then
         LocalPlayer:Kick("Anti-Player triggered: " .. player.Name .. " joined the server.")
     end
 end)
 task.spawn(function()
     while task.wait(5) do
-        if Tabs.Misc:GetToggle("AntiPlayer") and Tabs.Misc:GetToggle("AntiPlayer").Value then
+        if Fluent.Options.AntiPlayer and Fluent.Options.AntiPlayer.Value then
             if #game:GetService("Players"):GetPlayers() > 1 then
                 LocalPlayer:Kick("Anti-Player triggered: Someone else is in the server.")
             end
