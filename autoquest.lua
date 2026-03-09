@@ -387,15 +387,6 @@ SaveManager:BuildConfigSection(Tabs.Config)
 Window:SelectTab(1)
 SaveManager:LoadAutoloadConfig()
 
--- หา Fluent ScreenGui (GUI ใหม่ที่เพิ่มหลัง Fluent โหลด)
-local fluentGui = nil
-for _, v in ipairs(coreGui:GetChildren()) do
-    if v:IsA("ScreenGui") and not preExistingGuis[v] then
-        fluentGui = v
-        break
-    end
-end
-
 Fluent:Notify({
     Title = "Soul Cultivation Hub",
     Content = "Loaded successfully! Found " .. #monsterValues .. " monster type(s).",
@@ -403,11 +394,12 @@ Fluent:Notify({
 })
 
 -- ==========================================
--- [ Floating Toggle Icon ]
+-- [ Floating Toggle Icon (ใช้ Window:Minimize) ]
 -- ==========================================
 local iconGui = Instance.new("ScreenGui")
 iconGui.Name         = "SCH_Icon"
 iconGui.ResetOnSpawn = false
+iconGui.DisplayOrder = 9999
 iconGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 pcall(function() iconGui.Parent = coreGui end)
 if not iconGui.Parent or iconGui.Parent ~= coreGui then
@@ -423,6 +415,7 @@ icon.TextColor3       = Color3.fromRGB(0, 200, 255)
 icon.Font             = Enum.Font.GothamBold
 icon.TextSize         = 13
 icon.BorderSizePixel  = 0
+icon.ZIndex           = 9999
 icon.Parent           = iconGui
 Instance.new("UICorner", icon).CornerRadius = UDim.new(1, 0)
 
@@ -430,19 +423,20 @@ local stroke = Instance.new("UIStroke", icon)
 stroke.Color     = Color3.fromRGB(0, 200, 255)
 stroke.Thickness = 2
 
-local uiVisible  = true
 local isDragging = false
 local dragStart, iconStartPos
 
-icon.InputBegan:Connect(function(input, _processed)
+icon.InputBegan:Connect(function(input)
     if input.UserInputType == Enum.UserInputType.MouseButton1
        or input.UserInputType == Enum.UserInputType.Touch then
-        isDragging    = false
-        dragStart     = input.Position
-        iconStartPos  = icon.Position
+        isDragging   = false
+        dragStart    = input.Position
+        iconStartPos = icon.Position
 
-        input.Changed:Connect(function()
+        local conn
+        conn = input.Changed:Connect(function()
             if input.UserInputState == Enum.UserInputState.End then
+                if conn then conn:Disconnect() end
                 dragStart = nil
                 return
             end
@@ -463,32 +457,19 @@ end)
 local function ToggleUI()
     if isDragging then
         isDragging = false
-        dragStart  = nil
         return
     end
-    dragStart = nil
 
-    -- ใช้ fluentGui ที่หาได้จากตอนโหลด (บรรทัด 390)
-    -- ถ้าหายให้หาใหม่
-    if not fluentGui or not fluentGui.Parent then
-        for _, v in ipairs(coreGui:GetChildren()) do
-            if v:IsA("ScreenGui") and not preExistingGuis[v] and v ~= iconGui then
-                fluentGui = v
-                break
-            end
-        end
-    end
+    -- ใช้ Fluent built-in API โดยตรง
+    -- Window:Minimize() จะ toggle Window.Minimized และ Window.Root.Visible
+    Window:Minimize()
 
-    uiVisible = not uiVisible
-
-    if fluentGui then
-        fluentGui.Enabled = uiVisible
-    end
-
+    -- อัพเดต icon color ตามสถานะ
+    local isOpen = not Window.Minimized
     local activeColor = Color3.fromRGB(0, 200, 255)
     local dimColor    = Color3.fromRGB(80, 80, 80)
-    stroke.Color      = uiVisible and activeColor or dimColor
-    icon.TextColor3   = uiVisible and activeColor or dimColor
+    stroke.Color    = isOpen and activeColor or dimColor
+    icon.TextColor3 = isOpen and activeColor or dimColor
 end
 
 icon.MouseButton1Up:Connect(ToggleUI)
