@@ -339,27 +339,40 @@ Tabs.Teleport:AddButton({
             end
             StopPhysicsFly()
             
-            -- รีเซ็ตค่าแรงเฉื่อย/ฟิสิกส์ทั้งหมดให้เป็น 0 ก่อนย้าย
-            hrp.AssemblyLinearVelocity = Vector3.zero
-            hrp.AssemblyAngularVelocity = Vector3.zero
-            
-            -- บังคับวาร์ปแบบทันที
-            hrp.CFrame = destination
-            
-            -- รีเซ็ตอีกรอบเผื่อค้าง
-            task.delay(0.05, function()
-                if hrp then
-                    hrp.AssemblyLinearVelocity = Vector3.zero
-                    hrp.AssemblyAngularVelocity = Vector3.zero
-                end
-            end)
-
+            _G.Teleporting = true
             Fluent:Notify({
-                Title = "Teleported",
-                Content = "Teleported to " .. selectedTarget,
+                Title = "Teleporting",
+                Content = "Flying to " .. selectedTarget .. "...",
                 Duration = 3
             })
+
+            task.spawn(function()
+                while _G.Teleporting do
+                    local currentHrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+                    if not currentHrp then break end
+                    local dist = (currentHrp.Position - destination.Position).Magnitude
+                    if dist < 10 then
+                        StopPhysicsFly()
+                        _G.Teleporting = false
+                        Fluent:Notify({ Title = "Arrived", Content = "Reached " .. selectedTarget, Duration = 3 })
+                        break
+                    end
+                    PhysicsFlyTo(destination)
+                    task.wait(0.1)
+                end
+            end)
         end
+    end
+})
+
+-- Stop Teleport
+Tabs.Teleport:AddButton({
+    Title = "Stop Teleport",
+    Description = "Stop flying immediately.",
+    Callback = function()
+        _G.Teleporting = false
+        StopPhysicsFly()
+        Fluent:Notify({ Title = "Stopped", Content = "Teleport cancelled.", Duration = 2 })
     end
 })
 
