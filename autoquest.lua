@@ -104,6 +104,13 @@ local function PhysicsFlyTo(targetCFrame)
 
     pos.Position = targetCFrame.Position
     ori.CFrame   = targetCFrame
+    
+    -- บังคับปิดชนกำแพงทันทีในจังหวะบิน
+    for _, p in ipairs(LocalPlayer.Character:GetDescendants()) do
+        if p:IsA("BasePart") and p.CanCollide then
+            p.CanCollide = false
+        end
+    end
 end
 
 local lastAttackTime = 0
