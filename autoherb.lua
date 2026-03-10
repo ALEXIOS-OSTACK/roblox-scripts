@@ -97,9 +97,17 @@ local function SafeAttack()
 
     pcall(function()
         local tool = char:FindFirstChild("Light") or LocalPlayer.Backpack:FindFirstChild("Light")
-        if not tool then return end
-        LocalPlayer.PlayerGui.Inventory.Manager.Toolbar:FireServer(1, tool)
-        ReplicatedStorage.RemoteEvents.Attack:FireServer("Light", { ["RootPart"] = hrp })
+        if tool then
+            if tool.Parent ~= char then
+                char.Humanoid:EquipTool(tool)
+            end
+            tool:Activate()
+            
+            -- Keep the remote firing as backup just in case
+            if tool:IsA("Tool") and ReplicatedStorage:FindFirstChild("RemoteEvents") then
+                ReplicatedStorage.RemoteEvents.Attack:FireServer("Light", { ["RootPart"] = hrp })
+            end
+        end
     end)
 end
 
@@ -210,12 +218,20 @@ local FarmState = "IDLE"
 local CurrentTarget = nil
 local WaitHopDelay = 0
 
+local AntiFallPart = Instance.new("Part")
+AntiFallPart.Name = "BossHopperAntiFall"
+AntiFallPart.Size = Vector3.new(500, 5, 500)
+AntiFallPart.Anchored = true
+AntiFallPart.Transparency = 1
+AntiFallPart.CanCollide = true
+
 task.spawn(function()
     while task.wait() do
         if not getgenv().BossHopConfig.AutoFarm then
             if FarmState ~= "IDLE" then
                 FarmState = "IDLE"
                 StopPhysicsFly()
+                if AntiFallPart.Parent then AntiFallPart.Parent = nil end
             end
             continue
         end
@@ -232,9 +248,15 @@ task.spawn(function()
             if CurrentTarget then
                 FarmState = "MOVING"
                 WaitHopDelay = 0
+                if AntiFallPart.Parent then AntiFallPart.Parent = nil end
             else
                 FarmState = "SEARCHING"
                 StopPhysicsFly()
+                
+                -- Anti-Fall mechanism: Generate an invisible floor below the player to prevent void death
+                if not AntiFallPart.Parent then AntiFallPart.Parent = workspace end
+                AntiFallPart.CFrame = hrp.CFrame * CFrame.new(0, -5, 0)
+                
                 if getgenv().BossHopConfig.AutoHop then
                     WaitHopDelay = WaitHopDelay + task.wait()
                     if WaitHopDelay > 4 then -- Wait 4 seconds to confirm all bosses are dead before hopping
@@ -245,6 +267,8 @@ task.spawn(function()
             end
             
         elseif FarmState == "MOVING" or FarmState == "ATTACKING" then
+            if AntiFallPart.Parent then AntiFallPart.Parent = nil end
+            
             local targetRoot = CurrentTarget:FindFirstChild("HumanoidRootPart") or CurrentTarget.PrimaryPart
             if not targetRoot then
                 FarmState = "SEARCHING"
