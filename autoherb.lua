@@ -1,34 +1,41 @@
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
-local TeleportService = game:GetService("TeleportService")
-local HttpService = game:GetService("HttpService")
+local UserInputService = game:GetService("UserInputService")
 local VirtualUser = game:GetService("VirtualUser")
 local LocalPlayer = Players.LocalPlayer
 
 -- ==========================================
--- [ Global Config ]
+-- [ 1. Global Config ]
 -- ==========================================
-getgenv().BossHopConfig = {
-    AutoFarm = false,
-    AutoHop = false,
-    SelectedBosses = {},
-    FarmPosition = "Behind",
-    FlySpeed = 150
-}
+_G.AutoFarm      = false
+_G.BossPriority  = false
+_G.SelectedBosses = {}
+_G.SelectedMonster = ""
+_G.FarmPosition  = "Behind"
+_G.FlySpeed      = 150
+_G.MinHP         = 30
+_G.Teleporting   = false
+_G.BringMobs     = false
 
 local BossList = {"Zanshi Bing Ren", "Zanshi Huo Ren", "Mount Hua Leader"}
 
 -- ==========================================
--- [ UI Library ]
+-- [ 2. UI Library ]
 -- ==========================================
-local Fluent = loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
-local SaveManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Addons/SaveManager.lua"))()
+local coreGui = game:GetService("CoreGui")
+local preExistingGuis = {}
+for _, v in ipairs(coreGui:GetChildren()) do
+    preExistingGuis[v] = true
+end
+
+local Fluent         = loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
+local SaveManager    = loadstring(game:HttpGet("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Addons/SaveManager.lua"))()
 local InterfaceManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Addons/InterfaceManager.lua"))()
 
 local Window = Fluent:CreateWindow({
     Title = "Private",
-    SubTitle = "Boss Hopper Hub",
+    SubTitle = "Auto Farm | v6.0",
     TabWidth = 160,
     Size = UDim2.fromOffset(580, 460),
     Acrylic = false,
@@ -37,29 +44,50 @@ local Window = Fluent:CreateWindow({
 })
 
 local Tabs = {
-    BossFarm = Window:AddTab({ Title = "Boss Farm", Icon = "swords" }),
-    Settings = Window:AddTab({ Title = "Settings", Icon = "settings" }),
+    Farm     = Window:AddTab({ Title = "Farm",     Icon = "swords" }),
+    Teleport = Window:AddTab({ Title = "Teleport", Icon = "map-pin" }),
+    Misc     = Window:AddTab({ Title = "Misc",     Icon = "box" }),
+    Settings = Window:AddTab({ Title = "Config",   Icon = "settings" }),
+    Config   = Window:AddTab({ Title = "Setting",  Icon = "save" }),
 }
 
 -- ==========================================
--- [ Core Functions ]
+-- [ 3. Entity Scanner ]
 -- ==========================================
+local function GetMonsterList()
+    local names = {}
+    local e = workspace:FindFirstChild("Enemies")
+    if e then
+        for _, obj in ipairs(e:GetChildren()) do
+            if obj:FindFirstChild("Humanoid") and not obj.Name:lower():find("zanshi") then
+                if not table.find(names, obj.Name) then table.insert(names, obj.Name) end
+            end
+        end
+    end
+    table.sort(names)
+    return names
+end
+
+-- ==========================================
+-- [ 4. Physics Fly Engine ]
+-- ==========================================
+local BASE_COOLDOWN = 0.18
+local JITTER_RANGE  = 0.08
+
 local function StopPhysicsFly()
-    local char = LocalPlayer.Character
-    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    local hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
     if hrp then
         for _, name in ipairs({"BypassPosition", "BypassOrientation", "BypassAttachment"}) do
             local p = hrp:FindFirstChild(name)
             if p then p:Destroy() end
         end
-        hrp.AssemblyLinearVelocity = Vector3.zero
+        hrp.AssemblyLinearVelocity  = Vector3.zero
         hrp.AssemblyAngularVelocity = Vector3.zero
     end
 end
 
 local function PhysicsFlyTo(targetCFrame)
-    local char = LocalPlayer.Character
-    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    local hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
     if not hrp then return end
 
     local att = hrp:FindFirstChild("BypassAttachment") or Instance.new("Attachment", hrp)
@@ -68,7 +96,7 @@ local function PhysicsFlyTo(targetCFrame)
     local pos = hrp:FindFirstChild("BypassPosition") or Instance.new("AlignPosition", hrp)
     pos.Name = "BypassPosition"; pos.Attachment0 = att
     pos.Mode = Enum.PositionAlignmentMode.OneAttachment
-    pos.MaxForce = math.huge; pos.MaxVelocity = getgenv().BossHopConfig.FlySpeed; pos.Responsiveness = 200
+    pos.MaxForce = math.huge; pos.MaxVelocity = _G.FlySpeed; pos.Responsiveness = 200
 
     local ori = hrp:FindFirstChild("BypassOrientation") or Instance.new("AlignOrientation", hrp)
     ori.Name = "BypassOrientation"; ori.Attachment0 = att
@@ -76,9 +104,10 @@ local function PhysicsFlyTo(targetCFrame)
     ori.MaxTorque = math.huge; ori.Responsiveness = 200
 
     pos.Position = targetCFrame.Position
-    ori.CFrame = targetCFrame
+    ori.CFrame   = targetCFrame
     
-    for _, p in ipairs(char:GetDescendants()) do
+    -- บังคับปิดชนกำแพงทันทีในจังหวะบิน
+    for _, p in ipairs(LocalPlayer.Character:GetDescendants()) do
         if p:IsA("BasePart") and p.CanCollide then
             p.CanCollide = false
         end
@@ -88,7 +117,8 @@ end
 local lastAttackTime = 0
 local function SafeAttack()
     local now = tick()
-    if now - lastAttackTime < 0.18 then return end
+    local cooldown = BASE_COOLDOWN + math.random() * JITTER_RANGE
+    if now - lastAttackTime < cooldown then return end
     lastAttackTime = now
 
     local char = LocalPlayer.Character
@@ -111,115 +141,372 @@ local function SafeAttack()
     end)
 end
 
+-- ==========================================
+-- [ 5. Farm Tab UI ]
+-- ==========================================
+Tabs.Farm:AddParagraph({ Title = "Farm Controls", Content = "Pick a target, choose a position, then start." })
+
+local FarmToggle = Tabs.Farm:AddToggle("FarmToggle", { Title = "Auto Farm", Default = false })
+FarmToggle:OnChanged(function(v) _G.AutoFarm = v end)
+
+local PriorityToggle = Tabs.Farm:AddToggle("PriorityToggle", { Title = "Boss Priority", Default = false, Description = "Kill bosses before regular mobs." })
+PriorityToggle:OnChanged(function(v) _G.BossPriority = v end)
+
+local BossDropdown = Tabs.Farm:AddDropdown("BossDropdown", {
+    Title = "Target Boss",
+    Values = BossList,
+    Multi = true,
+    Default = {},
+})
+BossDropdown:OnChanged(function(v) _G.SelectedBosses = v end)
+
+-- Monster Dropdown
+local monsterValues = GetMonsterList()
+if #monsterValues == 0 then monsterValues = {"(No Monsters Found)"} end
+
+local MonsterDropdown = Tabs.Farm:AddDropdown("MonsterDropdown", {
+    Title = "Target Monster",
+    Values = monsterValues,
+    Default = 1,
+})
+MonsterDropdown:OnChanged(function(v)
+    if v ~= "(No Monsters Found)" then _G.SelectedMonster = v end
+end)
+if monsterValues[1] ~= "(No Monsters Found)" then
+    _G.SelectedMonster = monsterValues[1]
+end
+
+local PositionDropdown = Tabs.Farm:AddDropdown("FarmPosition", {
+    Title = "Stand Position",
+    Description = "Where to stand while attacking.",
+    Values = {"Behind", "On Head", "Under"},
+    Default = 1,
+})
+PositionDropdown:OnChanged(function(v) _G.FarmPosition = v end)
+
+local BringMobToggle = Tabs.Farm:AddToggle("BringMobToggle", { 
+    Title = "Bring Mobs (Magnet)", 
+    Default = false, 
+    Description = "Bypass: Teleports targeted mobs to your position." 
+})
+BringMobToggle:OnChanged(function(v) _G.BringMobs = v end)
+
+Tabs.Farm:AddButton({
+    Title = "Refresh Targets",
+    Description = "Re-scan all enemies in the area.",
+    Callback = function()
+        local newList = GetMonsterList()
+        if #newList == 0 then newList = {"(No Monsters Found)"} end
+        pcall(function() MonsterDropdown:SetValue(newList[1]) end)
+        if newList[1] ~= "(No Monsters Found)" then
+            _G.SelectedMonster = newList[1]
+        end
+        Fluent:Notify({
+            Title = "Refreshed",
+            Content = "Found " .. #newList .. " monster type(s).\nTarget: " .. _G.SelectedMonster,
+            Duration = 3
+        })
+    end
+})
+
+-- ==========================================
+-- [ 6. Teleport Tab ]
+-- ==========================================
+-- Scan NPCs
+local function GetNPCList()
+    local names = {}
+    local npcFolder = workspace:FindFirstChild("NPCs")
+    if npcFolder then
+        for _, npc in ipairs(npcFolder:GetChildren()) do
+            if npc:FindFirstChild("HumanoidRootPart") or npc:FindFirstChild("Head") or npc:IsA("BasePart") or npc:IsA("Model") then
+                if not table.find(names, npc.Name) then
+                    table.insert(names, npc.Name)
+                end
+            end
+        end
+    end
+    table.sort(names)
+    return names
+end
+
+-- Scan Training Zones
+local function GetZoneList(subFolder)
+    local names = {}
+    local tz = workspace:FindFirstChild("Training Zones")
+    if tz then
+        local folder = tz:FindFirstChild(subFolder)
+        if folder then
+            for _, zone in ipairs(folder:GetChildren()) do
+                if not table.find(names, zone.Name) then
+                    table.insert(names, zone.Name)
+                end
+            end
+        end
+    end
+    table.sort(names)
+    return names
+end
+
+-- Get position of object (supports Model and BasePart)
+local function GetPosition(obj)
+    if obj:IsA("Model") then
+        local hrp = obj:FindFirstChild("HumanoidRootPart") or obj:FindFirstChild("Head")
+        if hrp then return hrp.CFrame end
+        if obj.PrimaryPart then return obj.PrimaryPart.CFrame end
+        for _, child in ipairs(obj:GetDescendants()) do
+            if child:IsA("BasePart") then return child.CFrame end
+        end
+    elseif obj:IsA("BasePart") then
+        return obj.CFrame
+    end
+    return nil
+end
+
+Tabs.Teleport:AddParagraph({ Title = "Teleport", Content = "Select category, pick target, then teleport." })
+
+-- Category Dropdown
+local selectedCategory = "NPC"
+local selectedTarget = ""
+
+local function GetTargetsForCategory(category)
+    if category == "NPC" then
+        return GetNPCList()
+    elseif category == "Qi" then
+        return GetZoneList("Qi")
+    elseif category == "Training" then
+        return GetZoneList("Training")
+    end
+    return {}
+end
+
+local initTargets = GetNPCList()
+if #initTargets == 0 then initTargets = {"(None Found)"} end
+selectedTarget = initTargets[1]
+
+local TargetDropdown = Tabs.Teleport:AddDropdown("TargetDropdown", {
+    Title = "Target",
+    Values = initTargets,
+    Default = 1,
+})
+TargetDropdown:OnChanged(function(v) selectedTarget = v end)
+
+-- Update target list when category changes
+local function UpdateTargets()
+    local targets = GetTargetsForCategory(selectedCategory)
+    if #targets == 0 then targets = {"(None Found)"} end
+    pcall(function()
+        TargetDropdown:SetValues(targets)
+        TargetDropdown:SetValue(targets[1])
+    end)
+    selectedTarget = targets[1]
+end
+
+local CategoryDropdown = Tabs.Teleport:AddDropdown("CategoryDropdown", {
+    Title = "Category",
+    Description = "Select teleport category.",
+    Values = {"NPC", "Qi", "Training"},
+    Default = 1,
+})
+CategoryDropdown:OnChanged(function(v)
+    selectedCategory = v
+    UpdateTargets()
+end)
+
+-- Teleport Button
+Tabs.Teleport:AddButton({
+    Title = "Teleport",
+    Description = "Fly to selected target.",
+    Callback = function()
+        if selectedTarget == "(None Found)" or selectedTarget == "" then
+            Fluent:Notify({ Title = "Error", Content = "No target selected.", Duration = 2 })
+            return
+        end
+
+        -- Find object by category
+        local targetObj = nil
+        if selectedCategory == "NPC" then
+            local folder = workspace:FindFirstChild("NPCs")
+            if folder then targetObj = folder:FindFirstChild(selectedTarget) end
+        elseif selectedCategory == "Qi" then
+            local tz = workspace:FindFirstChild("Training Zones")
+            local folder = tz and tz:FindFirstChild("Qi")
+            if folder then targetObj = folder:FindFirstChild(selectedTarget) end
+        elseif selectedCategory == "Training" then
+            local tz = workspace:FindFirstChild("Training Zones")
+            local folder = tz and tz:FindFirstChild("Training")
+            if folder then targetObj = folder:FindFirstChild(selectedTarget) end
+        end
+
+        if not targetObj then
+            Fluent:Notify({ Title = "Error", Content = "'" .. selectedTarget .. "' not found.", Duration = 3 })
+            return
+        end
+
+        local targetCF = GetPosition(targetObj)
+        if not targetCF then
+            Fluent:Notify({ Title = "Error", Content = "Can't get position.", Duration = 3 })
+            return
+        end
+
+        -- NPC: offset in front / Zone: exact position
+        local destination = selectedCategory == "NPC"
+            and targetCF * CFrame.new(0, 0, 5)
+            or targetCF
+
+        local char = LocalPlayer.Character
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        if hrp then
+            if _G.AutoFarm then
+                _G.AutoFarm = false
+                pcall(function() FarmToggle:SetValue(false) end)
+            end
+            StopPhysicsFly()
+            
+            _G.Teleporting = true
+            Fluent:Notify({
+                Title = "Teleporting",
+                Content = "Flying to " .. selectedTarget .. "...",
+                Duration = 3
+            })
+
+            task.spawn(function()
+                while _G.Teleporting do
+                    local currentHrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+                    if not currentHrp then break end
+                    local dist = (currentHrp.Position - destination.Position).Magnitude
+                    if dist < 10 then
+                        StopPhysicsFly()
+                        _G.Teleporting = false
+                        Fluent:Notify({ Title = "Arrived", Content = "Reached " .. selectedTarget, Duration = 3 })
+                        break
+                    end
+                    PhysicsFlyTo(destination)
+                    task.wait(0.1)
+                end
+            end)
+        end
+    end
+})
+
+-- Stop Teleport
+Tabs.Teleport:AddButton({
+    Title = "Stop Teleport",
+    Description = "Stop flying immediately.",
+    Callback = function()
+        _G.Teleporting = false
+        StopPhysicsFly()
+        Fluent:Notify({ Title = "Stopped", Content = "Teleport cancelled.", Duration = 2 })
+    end
+})
+
+-- Refresh Targets
+Tabs.Teleport:AddButton({
+    Title = "Refresh Targets",
+    Description = "Re-scan targets for current category.",
+    Callback = function()
+        UpdateTargets()
+        local targets = GetTargetsForCategory(selectedCategory)
+        Fluent:Notify({
+            Title = "Refreshed",
+            Content = selectedCategory .. ": " .. #targets .. " target(s) found.",
+            Duration = 3
+        })
+    end
+})
+
+-- ==========================================
+-- [ 7. Settings Tab ]
+-- ==========================================
+local FlySlider = Tabs.Settings:AddSlider("FlySpeed", {
+    Title = "Fly Speed",
+    Default = 150, Min = 50, Max = 500, Rounding = 0
+})
+FlySlider:OnChanged(function(v) _G.FlySpeed = v end)
+
+local AttackSlider = Tabs.Settings:AddSlider("AttackRate", {
+    Title = "Attack Speed (ms)",
+    Description = "Higher = slower = safer",
+    Default = 18, Min = 10, Max = 100, Rounding = 0
+})
+AttackSlider:OnChanged(function(v) BASE_COOLDOWN = v / 1000 end)
+
+local HPSlider = Tabs.Settings:AddSlider("MinHP", {
+    Title = "Safety HP (%)",
+    Description = "Stop farming below this HP. Set 0 to disable.",
+    Default = 30, Min = 0, Max = 90, Rounding = 0
+})
+HPSlider:OnChanged(function(v) _G.MinHP = v end)
+
+-- ==========================================
+-- [ 8. Misc Tab ]
+-- ==========================================
+local AntiAFKToggle = Tabs.Misc:AddToggle("AntiAFK", { Title = "Anti-AFK", Default = true })
+
+local AntiPlayerToggle = Tabs.Misc:AddToggle("AntiPlayer", { 
+    Title = "Anti-Player", 
+    Description = "Auto-kick yourself if anyone else joins the server to avoid admins.",
+    Default = false 
+})
+
+-- ==========================================
+-- [ 9. Target Finder & State Machine (Premium) ]
+-- ==========================================
+local FarmState = "IDLE" -- IDLE, SEARCHING, MOVING, ATTACKING
+local CurrentTarget = nil
+
 local function GetTargetBoundingBoxRadius(model)
     local root = model:FindFirstChild("HumanoidRootPart") or model.PrimaryPart
     if model:IsA("Model") then
         local extents = model:GetExtentsSize()
+        -- average size roughly determines radius
         return math.max(extents.X, extents.Z) / 2
     elseif root then
         return math.max(root.Size.X, root.Size.Z) / 2
     end
-    return 2
+    return 2 -- fallback
 end
 
-local function ServerHop()
-    if getgenv().Hopping then return end
-    getgenv().Hopping = true
-    Fluent:Notify({ Title = "Server Hop", Content = "Boss not found/dead. Looking for a new server...", Duration = 5 })
-    
-    task.spawn(function()
-        local url = "https://games.roblox.com/v1/games/" .. game.PlaceId .. "/servers/Public?sortOrder=Asc&limit=100"
-        pcall(function()
-            local req = request or http_request or (syn and syn.request)
-            if not req then return end
-            
-            local response = req({Url = url, Method = "GET"})
-            if response.StatusCode == 200 then
-                local body = HttpService:JSONDecode(response.Body)
-                if body and body.data then
-                    for _, v in ipairs(body.data) do
-                        if type(v) == "table" and v.playing < v.maxPlayers and v.id ~= game.JobId then
-                            TeleportService:TeleportToPlaceInstance(game.PlaceId, v.id, LocalPlayer)
-                            task.wait(2)
-                        end
-                    end
-                end
-            end
-        end)
-        getgenv().Hopping = false
-    end)
-end
-
-local function GetOptimalBoss()
+local function GetOptimalTarget()
     local enemiesFolder = workspace:FindFirstChild("Enemies")
     if not enemiesFolder then return nil end
     
-    local myPos = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") and LocalPlayer.Character.HumanoidRootPart.Position
-    if not myPos then return nil end
+    local char = LocalPlayer.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return nil end
     
+    local myPos = hrp.Position
     local bestBoss = nil
-    local bestDist = math.huge
+    local bestBossScore = math.huge
+    local bestMob = nil
+    local bestMobScore = math.huge
     
     for _, e in ipairs(enemiesFolder:GetChildren()) do
         local hum = e:FindFirstChildOfClass("Humanoid")
         local root = e:FindFirstChild("HumanoidRootPart") or e.PrimaryPart
         if hum and root and hum.Health > 0.1 and hum:GetState() ~= Enum.HumanoidStateType.Dead then
-            if getgenv().BossHopConfig.SelectedBosses[e.Name] then
-                local dist = (myPos - root.Position).Magnitude
-                if dist < bestDist then
-                    bestDist = dist
+            local dist = (myPos - root.Position).Magnitude
+            if _G.BossPriority and _G.SelectedBosses[e.Name] then
+                if dist < bestBossScore then
+                    bestBossScore = dist
                     bestBoss = e
+                end
+            elseif e.Name == _G.SelectedMonster then
+                if dist < bestMobScore then
+                    bestMobScore = dist
+                    bestMob = e
                 end
             end
         end
     end
     
-    return bestBoss
+    return bestBoss or bestMob
 end
 
--- ==========================================
--- [ Boss Farm UI ]
--- ==========================================
-Tabs.BossFarm:AddParagraph({ Title = "Boss Auto Farm", Content = "Select targets and optionally enable Server Hop." })
-
-local FarmToggle = Tabs.BossFarm:AddToggle("AutoFarmToggle", { Title = "Auto Farm Boss", Default = false })
-FarmToggle:OnChanged(function(v) getgenv().BossHopConfig.AutoFarm = v end)
-
-local HopToggle = Tabs.BossFarm:AddToggle("AutoHopToggle", { Title = "Auto Server Hop", Description = "Hop server automatically if no selected boss is alive.", Default = false })
-HopToggle:OnChanged(function(v) getgenv().BossHopConfig.AutoHop = v end)
-
-local BossDropdown = Tabs.BossFarm:AddDropdown("BossDropdown", {
-    Title = "Target Bosses",
-    Values = BossList,
-    Multi = true,
-    Default = {},
-})
-BossDropdown:OnChanged(function(v) getgenv().BossHopConfig.SelectedBosses = v end)
-
-local PositionDropdown = Tabs.BossFarm:AddDropdown("FarmPosition", {
-    Title = "Stand Position",
-    Values = {"Behind", "On Head", "Under"},
-    Default = 1,
-})
-PositionDropdown:OnChanged(function(v) getgenv().BossHopConfig.FarmPosition = v end)
-
-Tabs.BossFarm:AddButton({
-    Title = "Manual Server Hop",
-    Description = "Skip this server instantly.",
-    Callback = function()
-        ServerHop()
-    end
-})
-
--- ==========================================
--- [ Main Loop ]
--- ==========================================
 local FarmState = "IDLE"
 local CurrentTarget = nil
-local WaitHopDelay = 0
 
 local AntiFallPart = Instance.new("Part")
-AntiFallPart.Name = "BossHopperAntiFall"
+AntiFallPart.Name = "AutoFarmAntiFall"
 AntiFallPart.Size = Vector3.new(500, 5, 500)
 AntiFallPart.Anchored = true
 AntiFallPart.Transparency = 1
@@ -227,7 +514,7 @@ AntiFallPart.CanCollide = true
 
 task.spawn(function()
     while task.wait() do
-        if not getgenv().BossHopConfig.AutoFarm then
+        if not _G.AutoFarm then
             if FarmState ~= "IDLE" then
                 FarmState = "IDLE"
                 StopPhysicsFly()
@@ -241,47 +528,58 @@ task.spawn(function()
         local hrp = char and char:FindFirstChild("HumanoidRootPart")
         if not char or not hum or not hrp then continue end
         
+        -- HP Safety Check
+        if _G.MinHP > 0 then
+            local hpPct = (hum.Health / hum.MaxHealth) * 100
+            if hpPct < _G.MinHP then
+                StopPhysicsFly()
+                _G.AutoFarm = false
+                FarmState = "IDLE"
+                pcall(function() FarmToggle:SetValue(false) end)
+                Fluent:Notify({ Title = "Warning: Low HP!", Content = "Auto Farm stopped.", Duration = 5 })
+                continue
+            end
+        end
+
         local isValidTarget = CurrentTarget and CurrentTarget.Parent and CurrentTarget:FindFirstChildOfClass("Humanoid") and CurrentTarget:FindFirstChildOfClass("Humanoid").Health > 0.1
         
         if FarmState == "IDLE" or FarmState == "SEARCHING" or not isValidTarget then
-            CurrentTarget = GetOptimalBoss()
+            CurrentTarget = GetOptimalTarget()
             if CurrentTarget then
                 FarmState = "MOVING"
-                WaitHopDelay = 0
                 if AntiFallPart.Parent then AntiFallPart.Parent = nil end
+                if CurrentTarget ~= _G.LastNotifiedTarget then
+                    _G.LastNotifiedTarget = CurrentTarget
+                    Fluent:Notify({ Title = "Target Locked", Content = "Now engaging: " .. CurrentTarget.Name, Duration = 2 })
+                end
             else
                 FarmState = "SEARCHING"
                 StopPhysicsFly()
                 
-                -- Anti-Fall mechanism: Generate an invisible floor below the player to prevent void death
+                -- Anti-Fall mechanism
                 if not AntiFallPart.Parent then AntiFallPart.Parent = workspace end
                 AntiFallPart.CFrame = hrp.CFrame * CFrame.new(0, -5, 0)
-                
-                if getgenv().BossHopConfig.AutoHop then
-                    WaitHopDelay = WaitHopDelay + task.wait()
-                    if WaitHopDelay > 4 then -- Wait 4 seconds to confirm all bosses are dead before hopping
-                        ServerHop()
-                        WaitHopDelay = 0
-                    end
-                end
             end
             
         elseif FarmState == "MOVING" or FarmState == "ATTACKING" then
             if AntiFallPart.Parent then AntiFallPart.Parent = nil end
             
             local targetRoot = CurrentTarget:FindFirstChild("HumanoidRootPart") or CurrentTarget.PrimaryPart
-            if not targetRoot then
+            local targetHum = CurrentTarget:FindFirstChildOfClass("Humanoid")
+            if not targetRoot or not targetHum then
                 FarmState = "SEARCHING"
                 continue
             end
             
+            -- Dynamic BoundingBox Distance
             local rBox = GetTargetBoundingBoxRadius(CurrentTarget) * 0.6
             local offset
-            if getgenv().BossHopConfig.FarmPosition == "On Head" then
+            if _G.FarmPosition == "On Head" then
                 offset = CFrame.new(0, rBox + 2, 0)
-            elseif getgenv().BossHopConfig.FarmPosition == "Under" then
+            elseif _G.FarmPosition == "Under" then
                 offset = CFrame.new(0, -(rBox + 2), 0)
             else
+                -- default Behind
                 offset = CFrame.new(0, 0, rBox + 2)
             end
             
@@ -293,11 +591,69 @@ task.spawn(function()
                 PhysicsFlyTo(standCFrame)
             else
                 FarmState = "ATTACKING"
+                
+                -- Hard lock velocity when attacking
                 hrp.CFrame = standCFrame
                 hrp.AssemblyLinearVelocity = Vector3.zero
                 hrp.AssemblyAngularVelocity = Vector3.zero
-                PhysicsFlyTo(standCFrame)
+                
+                PhysicsFlyTo(standCFrame) -- Maintain bypass anchor
                 SafeAttack()
+            end
+        end
+    end
+end)
+
+-- ==========================================
+-- [ 12. Background Services ]
+-- ==========================================
+-- Anti-Player (Kick if someone else joins)
+game:GetService("Players").PlayerAdded:Connect(function(player)
+    if Fluent.Options.AntiPlayer and Fluent.Options.AntiPlayer.Value then
+        LocalPlayer:Kick("Anti-Player triggered: " .. player.Name .. " joined the server.")
+    end
+end)
+task.spawn(function()
+    while task.wait(5) do
+        if Fluent.Options.AntiPlayer and Fluent.Options.AntiPlayer.Value then
+            if #game:GetService("Players"):GetPlayers() > 1 then
+                LocalPlayer:Kick("Anti-Player triggered: Someone else is in the server.")
+            end
+        end
+    end
+end)
+
+-- Save Noclip & Bring Mobs (Stepped)
+RunService.Stepped:Connect(function()
+    local char = LocalPlayer.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    
+    -- Safe Noclip
+    local flying = hrp and hrp:FindFirstChild("BypassPosition") ~= nil
+    if (_G.AutoFarm or _G.Teleporting) and flying and char then
+        for _, p in ipairs(char:GetDescendants()) do
+            if p:IsA("BasePart") and p.CanCollide then
+                p.CanCollide = false
+            end
+        end
+    end
+    
+    -- Bring Mobs Bypass
+    if _G.AutoFarm and _G.BringMobs and hrp and CurrentTarget then
+        local targetName = CurrentTarget.Name
+        local enemiesFolder = workspace:FindFirstChild("Enemies")
+        if enemiesFolder then
+            for _, e in ipairs(enemiesFolder:GetChildren()) do
+                if e.Name == targetName and e ~= CurrentTarget then
+                    local mobHum = e:FindFirstChildOfClass("Humanoid")
+                    local mobRoot = e:FindFirstChild("HumanoidRootPart")
+                    if mobHum and mobHum.Health > 0 and mobRoot then
+                        -- Set Network Ownership implicitly by teleporting them to our CFrame
+                        -- This bypass works if the server prioritizes client physics ownership
+                        mobRoot.CFrame = CurrentTarget:FindFirstChild("HumanoidRootPart") and CurrentTarget.HumanoidRootPart.CFrame or hrp.CFrame * CFrame.new(0, 0, -4)
+                        mobRoot.AssemblyLinearVelocity = Vector3.zero
+                    end
+                end
             end
         end
     end
@@ -305,22 +661,110 @@ end)
 
 -- Anti-AFK
 LocalPlayer.Idled:Connect(function()
-    VirtualUser:CaptureController()
-    VirtualUser:ClickButton2(Vector2.zero)
+    if Fluent.Options.AntiAFK and Fluent.Options.AntiAFK.Value then
+        VirtualUser:CaptureController()
+        VirtualUser:ClickButton2(Vector2.zero)
+    end
 end)
 
 -- ==========================================
--- [ Save Manager (Settings) ]
+-- [ 13. Save Manager ]
 -- ==========================================
 SaveManager:SetLibrary(Fluent)
 InterfaceManager:SetLibrary(Fluent)
 SaveManager:IgnoreThemeSettings()
 SaveManager:SetIgnoreIndexes({})
-InterfaceManager:SetFolder("BossHopperHub")
-SaveManager:SetFolder("BossHopperHub/Configs")
-InterfaceManager:BuildInterfaceSection(Tabs.Settings)
-SaveManager:BuildConfigSection(Tabs.Settings)
+InterfaceManager:SetFolder("SoulCultivationHub")
+SaveManager:SetFolder("SoulCultivationHub/Configs")
+InterfaceManager:BuildInterfaceSection(Tabs.Config)
+SaveManager:BuildConfigSection(Tabs.Config)
 
 Window:SelectTab(1)
 SaveManager:LoadAutoloadConfig()
-Fluent:Notify({ Title = "Loaded", Content = "Boss Hopper is ready!", Duration = 3 })
+
+Fluent:Notify({
+    Title = "Soul Cultivation Hub",
+    Content = "Loaded successfully! Found " .. #monsterValues .. " monster type(s).",
+    Duration = 4
+})
+
+-- ==========================================
+-- [ 14. Floating Toggle Icon ]
+-- ==========================================
+local iconGui = Instance.new("ScreenGui")
+iconGui.Name         = "SCH_Icon"
+iconGui.ResetOnSpawn = false
+iconGui.DisplayOrder = 9999
+iconGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+pcall(function() iconGui.Parent = coreGui end)
+if not iconGui.Parent or iconGui.Parent ~= coreGui then
+    iconGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+end
+
+local icon = Instance.new("TextButton")
+icon.Size             = UDim2.fromOffset(48, 48)
+icon.Position         = UDim2.new(0, 16, 0.5, -24)
+icon.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+icon.Text             = "HUB"
+icon.TextColor3       = Color3.fromRGB(0, 200, 255)
+icon.Font             = Enum.Font.GothamBold
+icon.TextSize         = 13
+icon.BorderSizePixel  = 0
+icon.ZIndex           = 9999
+icon.Parent           = iconGui
+Instance.new("UICorner", icon).CornerRadius = UDim.new(1, 0)
+
+local stroke = Instance.new("UIStroke", icon)
+stroke.Color     = Color3.fromRGB(0, 200, 255)
+stroke.Thickness = 2
+
+local isDragging = false
+local dragStart, iconStartPos
+
+icon.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1
+       or input.UserInputType == Enum.UserInputType.Touch then
+        isDragging   = false
+        dragStart    = input.Position
+        iconStartPos = icon.Position
+
+        local conn
+        conn = input.Changed:Connect(function()
+            if input.UserInputState == Enum.UserInputState.End then
+                if conn then conn:Disconnect() end
+                dragStart = nil
+                return
+            end
+            if dragStart then
+                local delta = input.Position - dragStart
+                if delta.Magnitude > 6 then
+                    isDragging = true
+                    icon.Position = UDim2.new(
+                        iconStartPos.X.Scale, iconStartPos.X.Offset + delta.X,
+                        iconStartPos.Y.Scale, iconStartPos.Y.Offset + delta.Y
+                    )
+                end
+            end
+        end)
+    end
+end)
+
+local function ToggleUI()
+    if isDragging then
+        isDragging = false
+        return
+    end
+
+    -- Use Fluent built-in minimize API
+    Window:Minimize()
+
+    -- Update icon color based on state
+    local isOpen = not Window.Minimized
+    local activeColor = Color3.fromRGB(0, 200, 255)
+    local dimColor    = Color3.fromRGB(80, 80, 80)
+    stroke.Color    = isOpen and activeColor or dimColor
+    icon.TextColor3 = isOpen and activeColor or dimColor
+end
+
+icon.MouseButton1Up:Connect(ToggleUI)
+icon.TouchTap:Connect(ToggleUI)
