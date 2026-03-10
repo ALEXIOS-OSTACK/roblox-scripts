@@ -45,10 +45,10 @@ local Window = WindUI:CreateWindow({
 })
 
 local Tabs = {
-    Farm     = Window:Tab({ Title = "Farm",     Icon = "swords" }),
-    Teleport = Window:Tab({ Title = "Teleport", Icon = "map-pin" }),
-    Settings = Window:Tab({ Title = "Settings", Icon = "settings" }),
-    Misc     = Window:Tab({ Title = "Misc",     Icon = "box" }),
+    Farm     = Window:Tab({ Title = "Farm",     Icon = "swords",     Border = true }),
+    Teleport = Window:Tab({ Title = "Teleport", Icon = "map-pin",    Border = true }),
+    Settings = Window:Tab({ Title = "Settings", Icon = "settings",   Border = true }),
+    Misc     = Window:Tab({ Title = "Misc",     Icon = "box",        Border = true }),
 }
 
 -- ==========================================
@@ -144,69 +144,73 @@ end
 -- ==========================================
 -- [ 5. Farm Tab UI ]
 -- ==========================================
-Tabs.Farm:AddParagraph({ Title = "Farm Controls", Content = "Pick a target, choose a position, then start." })
+pcall(function()
+    Tabs.Farm:AddParagraph({ Title = "Farm Controls", Content = "Pick a target, choose a position, then start." })
+    Tabs.Farm:Section({ Title = "🔥 การโจมตี (Combat)" })
+    
+    Tabs.Farm:Toggle({ 
+        Title = "เริ่มฟาร์มอัตโนมัติ (Start Auto Farm)", 
+        Callback = function(v) _G.AutoFarm = v end 
+    })
+end)
 
-local FarmSection = Tabs.Farm:Section({ Title = "🔥 การโจมตี (Combat)" })
+pcall(function()
+    Tabs.Farm:Toggle({ 
+        Title = "ตีบอสก่อนเป็นอันดับแรก (Priority Boss)", 
+        Desc = "ถ้ามีบอสเกิด สคริปต์จะพุ่งไปตีบอสก่อนมอนสเตอร์ปกติเสมอ", 
+        Callback = function(v) _G.BossPriority = v end 
+    })
 
-FarmSection:Toggle({ 
-    Title = "เริ่มฟาร์มอัตโนมัติ (Start Auto Farm)", 
-    Callback = function(v) _G.AutoFarm = v end 
-})
-
-FarmSection:Toggle({ 
-    Title = "ตีบอสก่อนเป็นอันดับแรก (Priority Boss)", 
-    Desc = "ถ้ามีบอสเกิด สคริปต์จะพุ่งไปตีบอสก่อนมอนสเตอร์ปกติเสมอ", 
-    Callback = function(v) _G.BossPriority = v end 
-})
-
-FarmSection:Dropdown({
-    Title = "เลือกบอสที่ต้องการฟาร์ม (Select Bosses)",
-    Values = BossList,
-    Multi = true,
-    Value = {},
-    Callback = function(v) _G.SelectedBosses = v end
-})
+    Tabs.Farm:Dropdown({
+        Title = "เลือกบอสที่ต้องการฟาร์ม (Select Bosses)",
+        Values = BossList,
+        Multi = true,
+        Value = {},
+        Callback = function(v) _G.SelectedBosses = v end
+    })
+end)
 
 -- Monster Dropdown
 local monsterValues = ScanMonsters()
 if #monsterValues == 0 then monsterValues = {"(ไม่มีมอนสเตอร์โผล่มา)"} end
 
-FarmSection:Dropdown({
-    Title = "เลือกมอนสเตอร์ (Select Monster)",
-    Values = monsterValues,
-    Value = monsterValues[1],
-    Callback = function(v)
-        if v ~= "(ไม่มีมอนสเตอร์โผล่มา)" then _G.SelectedMonster = v end
-    end
-})
-if monsterValues[1] ~= "(ไม่มีมอนสเตอร์โผล่มา)" then
-    _G.SelectedMonster = monsterValues[1]
-end
-
-FarmSection:Dropdown({
-    Title = "จุดยืนตอนโจมตี (Stand Position)",
-    Desc = "ตำแหน่งที่คุณจะยืนเกาะมอนสเตอร์เวลาฟาร์ม (แนะนำ: ด้านหลัง)",
-    Values = {"Behind", "On Head", "Under"},
-    Value = "Behind",
-    Callback = function(v) _G.FarmPosition = v end
-})
-
-FarmSection:Button({
-    Title = "อัปเดตรายชื่อมอนสเตอร์ (Refresh List)",
-    Desc = "กดเพื่อให้สคริปต์ค้นหามอนสเตอร์รอบๆ ตัวใหม่",
-    Callback = function()
-        local newList = ScanMonsters()
-        if #newList == 0 then newList = {"(ไม่มีมอนสเตอร์โผล่มา)"} end
-        if newList[1] ~= "(ไม่มีมอนสเตอร์โผล่มา)" then
-            _G.SelectedMonster = newList[1]
+pcall(function()
+    Tabs.Farm:Dropdown({
+        Title = "เลือกมอนสเตอร์ (Select Monster)",
+        Values = monsterValues,
+        Value = monsterValues[1],
+        Callback = function(v)
+            if v ~= "(ไม่มีมอนสเตอร์โผล่มา)" then _G.SelectedMonster = v end
         end
-        WindUI:Notify({
-            Title = "อัปเดตเรียบร้อย!",
-            Content = "พบมอนสเตอร์ " .. #newList .. " ตัว (โปรดเลือกในเมนูด้านบนใหม่)",
-            Duration = 3
-        })
-    end
-})
+    })
+    
+    Tabs.Farm:Dropdown({
+        Title = "จุดยืนตอนโจมตี (Stand Position)",
+        Desc = "ตำแหน่งที่คุณจะยืนเกาะมอนสเตอร์เวลาฟาร์ม (แนะนำ: ด้านหลัง)",
+        Values = {"Behind", "On Head", "Under"},
+        Value = "Behind",
+        Callback = function(v) _G.FarmPosition = v end
+    })
+end)
+
+pcall(function()
+    Tabs.Farm:Button({
+        Title = "อัปเดตรายชื่อมอนสเตอร์ (Refresh List)",
+        Desc = "กดเพื่อให้สคริปต์ค้นหามอนสเตอร์รอบๆ ตัวใหม่",
+        Callback = function()
+            local newList = ScanMonsters()
+            if #newList == 0 then newList = {"(ไม่มีมอนสเตอร์โผล่มา)"} end
+            if newList[1] ~= "(ไม่มีมอนสเตอร์โผล่มา)" then
+                _G.SelectedMonster = newList[1]
+            end
+            WindUI:Notify({
+                Title = "อัปเดตเรียบร้อย!",
+                Content = "พบมอนสเตอร์ " .. #newList .. " ตัว (โปรดเลือกในเมนูด้านบนใหม่)",
+                Duration = 3
+            })
+        end
+    })
+end)
 
 -- ==========================================
 -- [ 6. Teleport Tab ]
@@ -261,196 +265,181 @@ local function FindPosition(obj)
     return nil
 end
 
-local TeleportSection = Tabs.Teleport:Section({ Title = "📍 จุดวาร์ป (Teleporting)" })
+pcall(function()
+    Tabs.Teleport:Section({ Title = "📍 จุดวาร์ป (Teleporting)" })
 
-local selectedCategory = "NPC"
-local selectedTarget = ""
+    TargetDropdown = Tabs.Teleport:Dropdown({
+        Title = "รายชื่อปลายทาง (Target)",
+        Values = initTargets,
+        Value = initTargets[1],
+        Callback = function(v) selectedTarget = v end,
+    })
 
-local function FetchTargetsByCategory(category)
-    if category == "NPC" then return ScanNPCs()
-    elseif category == "Qi" then return ScanZones("Qi")
-    elseif category == "Training" then return ScanZones("Training") end
-    return {}
-end
+    Tabs.Teleport:Dropdown({
+        Title = "หมวดหมู่การวาร์ป (Category)",
+        Desc = "เลือกประเภทของสิ่งที่คุณอยากวาร์ปไปหา",
+        Values = {"NPC", "Qi", "Training"},
+        Value = "NPC",
+        Callback = function(v)
+            selectedCategory = v
+            RefreshTargetList()
+        end,
+    })
+end)
 
-local initTargets = ScanNPCs()
-if #initTargets == 0 then initTargets = {"(None Found)"} end
-selectedTarget = initTargets[1]
-
-local TargetDropdown = TeleportSection:Dropdown({
-    Title = "รายชื่อปลายทาง (Target)",
-    Values = initTargets,
-    Value = initTargets[1],
-    Callback = function(v) selectedTarget = v end,
-})
-
-local function RefreshTargetList()
-    local targets = FetchTargetsByCategory(selectedCategory)
-    if #targets == 0 then targets = {"(None Found)"} end
-    TargetDropdown:SetValues(targets)
-    selectedTarget = targets[1]
-end
-
-TeleportSection:Dropdown({
-    Title = "หมวดหมู่การวาร์ป (Category)",
-    Desc = "เลือกประเภทของสิ่งที่คุณอยากวาร์ปไปหา",
-    Values = {"NPC", "Qi", "Training"},
-    Value = "NPC",
-    Callback = function(v)
-        selectedCategory = v
-        RefreshTargetList()
-    end,
-})
-
-TeleportSection:Button({
-    Title = "🚀 วาร์ปเลย (Start Teleport)",
-    Desc = "ระบบจะบินข้ามแมพไปหาเป้าหมายอย่างปลอดภัย",
-    Callback = function()
-        if selectedTarget == "(None Found)" or selectedTarget == "" then
-            WindUI:Notify({ Title = "ข้อผิดพลาด", Content = "โปรดเลือกเป้าหมายก่อนครับ!", Duration = 2 })
-            return
-        end
-
-        -- Find object by category
-        local targetObj = nil
-        if selectedCategory == "NPC" then
-            local folder = workspace:FindFirstChild("NPCs")
-            if folder then targetObj = folder:FindFirstChild(selectedTarget) end
-        elseif selectedCategory == "Qi" then
-            local tz = workspace:FindFirstChild("Training Zones")
-            local folder = tz and tz:FindFirstChild("Qi")
-            if folder then targetObj = folder:FindFirstChild(selectedTarget) end
-        elseif selectedCategory == "Training" then
-            local tz = workspace:FindFirstChild("Training Zones")
-            local folder = tz and tz:FindFirstChild("Training")
-            if folder then targetObj = folder:FindFirstChild(selectedTarget) end
-        end
-
-        if not targetObj then
-            WindUI:Notify({ Title = "Error", Content = "'" .. selectedTarget .. "' not found.", Duration = 3 })
-            return
-        end
-
-        local targetCF = FindPosition(targetObj)
-        if not targetCF then
-            WindUI:Notify({ Title = "Error", Content = "Can't get position.", Duration = 3 })
-            return
-        end
-
-        -- NPC: offset in front / Zone: exact position
-        local destination = selectedCategory == "NPC"
-            and targetCF * CFrame.new(0, 0, 5)
-            or targetCF
-
-        local char = LocalPlayer.Character
-        local hrp = char and char:FindFirstChild("HumanoidRootPart")
-        if hrp then
-            if _G.AutoFarm then
-                _G.AutoFarm = false
+pcall(function()
+    Tabs.Teleport:Button({
+        Title = "🚀 วาร์ปเลย (Start Teleport)",
+        Desc = "ระบบจะบินข้ามแมพไปหาเป้าหมายอย่างปลอดภัย",
+        Callback = function()
+            if selectedTarget == "(None Found)" or selectedTarget == "" then
+                WindUI:Notify({ Title = "ข้อผิดพลาด", Content = "โปรดเลือกเป้าหมายก่อนครับ!", Duration = 2 })
+                return
             end
+
+            local targetObj = nil
+            if selectedCategory == "NPC" then
+                local folder = workspace:FindFirstChild("NPCs")
+                if folder then targetObj = folder:FindFirstChild(selectedTarget) end
+            elseif selectedCategory == "Qi" then
+                local tz = workspace:FindFirstChild("Training Zones")
+                local folder = tz and tz:FindFirstChild("Qi")
+                if folder then targetObj = folder:FindFirstChild(selectedTarget) end
+            elseif selectedCategory == "Training" then
+                local tz = workspace:FindFirstChild("Training Zones")
+                local folder = tz and tz:FindFirstChild("Training")
+                if folder then targetObj = folder:FindFirstChild(selectedTarget) end
+            end
+
+            if not targetObj then
+                WindUI:Notify({ Title = "Error", Content = "'" .. selectedTarget .. "' not found.", Duration = 3 })
+                return
+            end
+
+            local targetCF = FindPosition(targetObj)
+            if not targetCF then
+                WindUI:Notify({ Title = "Error", Content = "Can't get position.", Duration = 3 })
+                return
+            end
+
+            local destination = selectedCategory == "NPC"
+                and targetCF * CFrame.new(0, 0, 5)
+                or targetCF
+
+            local char = LocalPlayer.Character
+            local hrp = char and char:FindFirstChild("HumanoidRootPart")
+            if hrp then
+                if _G.AutoFarm then
+                    _G.AutoFarm = false
+                end
+                StopFlying()
+                
+                _G.Teleporting = true
+                WindUI:Notify({
+                    Title = "Teleporting",
+                    Content = "Flying to " .. selectedTarget .. "...",
+                    Duration = 3
+                })
+
+                task.spawn(function()
+                    while _G.Teleporting do
+                        local currentHrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+                        if not currentHrp then break end
+                        local dist = (currentHrp.Position - destination.Position).Magnitude
+                        if dist < 10 then
+                            StopFlying()
+                            _G.Teleporting = false
+                            WindUI:Notify({ Title = "Arrived", Content = "Reached " .. selectedTarget, Duration = 3 })
+                            break
+                        end
+                        FlyToTarget(destination)
+                        task.wait(0.1)
+                    end
+                end)
+            end
+        end
+    })
+
+    -- Stop Teleport
+    Tabs.Teleport:Button({
+        Title = "🛑 หยุดวาร์ป (Cancel)",
+        Desc = "เบรกกลางอากาศทันที",
+        Callback = function()
+            _G.Teleporting = false
             StopFlying()
-            
-            _G.Teleporting = true
+            WindUI:Notify({ Title = "หยุดเรียบร้อย", Content = "ยกเลิกการวาร์ปแล้วครับ", Duration = 2 })
+        end
+    })
+
+    -- Refresh Targets
+    Tabs.Teleport:Button({
+        Title = "Refresh Targets",
+        Desc = "Re-scan targets for current category.",
+        Callback = function()
+            RefreshTargetList()
+            local targets = FetchTargetsByCategory(selectedCategory)
             WindUI:Notify({
-                Title = "Teleporting",
-                Content = "Flying to " .. selectedTarget .. "...",
+                Title = "Refreshed",
+                Content = selectedCategory .. ": " .. #targets .. " target(s) found.",
                 Duration = 3
             })
-
-            task.spawn(function()
-                while _G.Teleporting do
-                    local currentHrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-                    if not currentHrp then break end
-                    local dist = (currentHrp.Position - destination.Position).Magnitude
-                    if dist < 10 then
-                        StopFlying()
-                        _G.Teleporting = false
-                        WindUI:Notify({ Title = "Arrived", Content = "Reached " .. selectedTarget, Duration = 3 })
-                        break
-                    end
-                    FlyToTarget(destination)
-                    task.wait(0.1)
-                end
-            end)
         end
-    end
-})
-
--- Stop Teleport
-TeleportSection:Button({
-    Title = "🛑 หยุดวาร์ป (Cancel)",
-    Desc = "เบรกกลางอากาศทันที",
-    Callback = function()
-        _G.Teleporting = false
-        StopFlying()
-        WindUI:Notify({ Title = "หยุดเรียบร้อย", Content = "ยกเลิกการวาร์ปแล้วครับ", Duration = 2 })
-    end
-})
-
--- Refresh Targets
-TeleportSection:Button({
-    Title = "Refresh Targets",
-    Desc = "Re-scan targets for current category.",
-    Callback = function()
-        RefreshTargetList()
-        local targets = FetchTargetsByCategory(selectedCategory)
-        WindUI:Notify({
-            Title = "Refreshed",
-            Content = selectedCategory .. ": " .. #targets .. " target(s) found.",
-            Duration = 3
-        })
-    end
-})
+    })
+end)
 
 -- ==========================================
 -- [ 7. Settings Tab ]
 -- ==========================================
-local SettingsSection = Tabs.Settings:Section({ Title = "⏱️ ความเร็วและเกราะป้องกัน" })
+pcall(function()
+    Tabs.Settings:Section({ Title = "⏱️ ความเร็วและเกราะป้องกัน" })
 
-SettingsSection:Slider({
-    Title = "ระยะเข้าทำ (Attack Distance)",
-    Desc = "ถ้าตีบอสไม่โดนหรือบินห่างเกินไป ให้ปรับลดเลขลงมา (หน่วย: Studs)",
-    Step = 1,
-    Value = { Min = -5, Max = 15, Default = 2 },
-    Callback = function(v) _G.AttackDistance = v end
-})
+    Tabs.Settings:Slider({
+        Title = "ระยะเข้าทำ (Attack Distance)",
+        Desc = "ถ้าตีบอสไม่โดนหรือบินห่างเกินไป ให้ปรับลดเลขลงมา (หน่วย: Studs)",
+        Step = 1,
+        Value = { Min = -5, Max = 15, Default = 2 },
+        Callback = function(v) _G.AttackDistance = v end
+    })
 
-SettingsSection:Slider({
-    Title = "ความเร็วการบิน (Fly Speed)",
-    Step = 1,
-    Value = { Min = 50, Max = 500, Default = 150 },
-    Callback = function(v) _G.FlySpeed = v end
-})
+    Tabs.Settings:Slider({
+        Title = "ความเร็วการบิน (Fly Speed)",
+        Step = 1,
+        Value = { Min = 50, Max = 500, Default = 150 },
+        Callback = function(v) _G.FlySpeed = v end
+    })
 
-SettingsSection:Slider({
-    Title = "ความเร็วการโจมตี (Attack Cooldown Delay)",
-    Desc = "ยิ่งเลขเยอะยิ่งตีช้า แต่จะเนียนตา ลดโอกาสโดนเกมแบน (หน่วย: มิลลิวินาที)",
-    Step = 1,
-    Value = { Min = 10, Max = 100, Default = 18 },
-    Callback = function(v) BASE_COOLDOWN = v / 1000 end
-})
+    Tabs.Settings:Slider({
+        Title = "ความเร็วการโจมตี (Attack Cooldown Delay)",
+        Desc = "ยิ่งเลขเยอะยิ่งตีช้า แต่จะเนียนตา ลดโอกาสโดนเกมแบน (หน่วย: มิลลิวินาที)",
+        Step = 1,
+        Value = { Min = 10, Max = 100, Default = 18 },
+        Callback = function(v) BASE_COOLDOWN = v / 1000 end
+    })
 
-SettingsSection:Slider({
-    Title = "เลือดฉุกเฉิน Safety HP (%)",
-    Desc = "ถ้าเลือดต่ำกว่าเปอร์เซ็นต์นี้ บอทจะหยุดฟาร์มทันทีเพื่อป้องกันตาย (ปรับเป็น 0 เพื่อปิด)",
-    Step = 1,
-    Value = { Min = 0, Max = 90, Default = 30 },
-    Callback = function(v) _G.MinHP = v end
-})
+    Tabs.Settings:Slider({
+        Title = "เลือดฉุกเฉิน Safety HP (%)",
+        Desc = "ถ้าเลือดต่ำกว่าเปอร์เซ็นต์นี้ บอทจะหยุดฟาร์มทันทีเพื่อป้องกันตาย (ปรับเป็น 0 เพื่อปิด)",
+        Step = 1,
+        Value = { Min = 0, Max = 90, Default = 30 },
+        Callback = function(v) _G.MinHP = v end
+    })
+end)
 
 -- ==========================================
 -- [ 8. Misc Tab ]
 -- ==========================================
-local MiscSection = Tabs.Misc:Section({ Title = "🛡️ ฟังก์ชันป้องกันเซิฟเวอร์" })
+pcall(function()
+    Tabs.Misc:Section({ Title = "🛡️ ฟังก์ชันป้องกันเซิฟเวอร์" })
 
-MiscSection:Toggle({ Title = "ป้องกันการ AFK (Anti-AFK)", Default = true, Callback = function(v) _G.AntiAFK = v end })
+    Tabs.Misc:Toggle({ Title = "ป้องกันการ AFK (Anti-AFK)", Default = true, Callback = function(v) _G.AntiAFK = v end })
 
-MiscSection:Toggle({ 
-    Title = "ระบบเตะผู้เล่นอื่น (Anti-Player)", 
-    Desc = "เตะตัวเองออกจากเซิฟเวอร์ทันทีถ้ามีคนอื่นจอยเข้ามา (เหมาะสำหรับฟาร์มเซิฟ V แบบลับๆ)",
-    Default = false,
-    Callback = function(v) _G.AntiPlayer = v end
-})
+    Tabs.Misc:Toggle({ 
+        Title = "ระบบเตะผู้เล่นอื่น (Anti-Player)", 
+        Desc = "เตะตัวเองออกจากเซิฟเวอร์ทันทีถ้ามีคนอื่นจอยเข้ามา (เหมาะสำหรับฟาร์มเซิฟ V แบบลับๆ)",
+        Default = false,
+        Callback = function(v) _G.AntiPlayer = v end
+    })
+end)
 
 -- ==========================================
 -- [ 9. Target Finder & State Machine (Premium) ]
