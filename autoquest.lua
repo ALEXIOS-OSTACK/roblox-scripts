@@ -432,12 +432,18 @@ local AntiPlayerToggle = Tabs.Misc:AddToggle("AntiPlayer", {
     Default = false 
 })
 
+local GhostBlacklist = {}
+local targetStuckTimer = 0
+local lastTargetHealth = -1
+local currentTrackedTarget = nil
+
 -- ==========================================
 -- [ 9. Target Finder (Pure Reactive Scanning) ]
 -- ==========================================
 local function IsValid(model)
     if not model or not model.Parent then return false end
     if model.Parent.Name ~= "Enemies" then return false end
+    if GhostBlacklist[model] and tick() < GhostBlacklist[model] then return false end
     
     local hum = model:FindFirstChildOfClass("Humanoid")
     local hrp = model:FindFirstChild("HumanoidRootPart") or model.PrimaryPart
@@ -496,6 +502,8 @@ local STATE_ATTACKING = 2
 local currentState = STATE_IDLE
 local stuckTimer = 0
 local lastPosition = Vector3.zero
+local lastDistToTarget = 999999
+local timeSinceDistChanged = 0
 
 task.spawn(function()
     while task.wait(0.05) do
@@ -525,6 +533,14 @@ task.spawn(function()
 
         local target = GetOptimalTarget()
         
+        if currentTrackedTarget ~= target then
+            currentTrackedTarget = target
+            targetStuckTimer = 0
+            lastTargetHealth = -1
+            lastDistToTarget = 999999
+            timeSinceDistChanged = 0
+        end
+        
         if not target then
             if currentState ~= STATE_IDLE then
                 StopPhysicsFly()
@@ -550,22 +566,25 @@ task.spawn(function()
         local distToTarget = (hrp.Position - targetRoot.Position).Magnitude
 
         -- State Machine Evaluation
-        if distToTarget > 10 then -- Forgiving approach distance
+        if distToTarget > 12 then -- Safe approach distance to let weapons hit without clipping
             -- STATE: MOVING
             currentState = STATE_MOVING
             PhysicsFlyTo(standPos)
             
-            -- Anti-Stuck System
-            if (hrp.Position - lastPosition).Magnitude < 1 then
-                stuckTimer = stuckTimer + 0.05
-                if stuckTimer > 5 then
-                    stuckTimer = 0
-                    -- We are stuck. The targeter is pure reactive, so we just wait or jitter.
+            -- S-Tier Anti-Stuck (Progress Tracker)
+            -- If we are flying, the distance should constantly decrease.
+            if math.abs(distToTarget - lastDistToTarget) < 2 then
+                timeSinceDistChanged = timeSinceDistChanged + 0.05
+                if timeSinceDistChanged > 4 then -- Stuck for 4 seconds
+                    pcall(function() Fluent:Notify({ Title = "Target Skipped", Content = "Unreachable Target! Blacklisting 60s.", Duration = 3 }) end)
+                    GhostBlacklist[target] = tick() + 60
+                    timeSinceDistChanged = 0
+                    currentTrackedTarget = nil
                 end
             else
-                stuckTimer = 0
+                timeSinceDistChanged = 0
+                lastDistToTarget = distToTarget
             end
-            lastPosition = hrp.Position
             
         else
             -- STATE: ATTACKING
@@ -577,7 +596,29 @@ task.spawn(function()
             hrp.AssemblyAngularVelocity = Vector3.zero
             
             SafeAttack()
-            stuckTimer = 0
+            timeSinceDistChanged = 0
+            
+            -- Boss Corpse Filter: Only blacklist BOSSES if they take 0 damage for 5 seconds.
+            if _G.BossPriority and _G.SelectedBosses[target.Name] then
+                local currentHP = targetHum.Health
+                if lastTargetHealth == -1 or currentHP >= lastTargetHealth then
+                    targetStuckTimer = targetStuckTimer + 0.05
+                    if targetStuckTimer > 5 then
+                        pcall(function() Fluent:Notify({ Title = "Ghost Boss Skipped", Content = "Boss corpse detected! Blacklisting 60s.", Duration = 3 }) end)
+                        GhostBlacklist[target] = tick() + 60
+                        targetStuckTimer = 0
+                        lastTargetHealth = -1
+                        currentTrackedTarget = nil
+                    end
+                else
+                    targetStuckTimer = 0
+                end
+                lastTargetHealth = currentHP
+            else
+                -- Normal Mobs NEVER get blacklisted. 
+                targetStuckTimer = 0
+                lastTargetHealth = -1
+            end
         end
     end
 end)
