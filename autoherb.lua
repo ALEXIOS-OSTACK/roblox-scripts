@@ -146,20 +146,20 @@ end
 -- ==========================================
 Tabs.Farm:AddParagraph({ Title = "Farm Controls", Content = "Pick a target, choose a position, then start." })
 
-Tabs.Farm:Section({ Title = "🔥 การโจมตี (Combat)" })
+local FarmSection = Tabs.Farm:Section({ Title = "🔥 การโจมตี (Combat)" })
 
-Tabs.Farm:Toggle({ 
+FarmSection:Toggle({ 
     Title = "เริ่มฟาร์มอัตโนมัติ (Start Auto Farm)", 
     Callback = function(v) _G.AutoFarm = v end 
 })
 
-Tabs.Farm:Toggle({ 
+FarmSection:Toggle({ 
     Title = "ตีบอสก่อนเป็นอันดับแรก (Priority Boss)", 
     Desc = "ถ้ามีบอสเกิด สคริปต์จะพุ่งไปตีบอสก่อนมอนสเตอร์ปกติเสมอ", 
     Callback = function(v) _G.BossPriority = v end 
 })
 
-Tabs.Farm:Dropdown({
+FarmSection:Dropdown({
     Title = "เลือกบอสที่ต้องการฟาร์ม (Select Bosses)",
     Values = BossList,
     Multi = true,
@@ -168,22 +168,22 @@ Tabs.Farm:Dropdown({
 })
 
 -- Monster Dropdown
-local monsterValues = GetMonsterList()
-if #monsterValues == 0 then monsterValues = {"(No Monsters Found)"} end
+local monsterValues = ScanMonsters()
+if #monsterValues == 0 then monsterValues = {"(ไม่มีมอนสเตอร์โผล่มา)"} end
 
-Tabs.Farm:Dropdown({
+FarmSection:Dropdown({
     Title = "เลือกมอนสเตอร์ (Select Monster)",
     Values = monsterValues,
     Value = monsterValues[1],
     Callback = function(v)
-        if v ~= "(No Monsters Found)" then _G.SelectedMonster = v end
+        if v ~= "(ไม่มีมอนสเตอร์โผล่มา)" then _G.SelectedMonster = v end
     end
 })
-if monsterValues[1] ~= "(No Monsters Found)" then
+if monsterValues[1] ~= "(ไม่มีมอนสเตอร์โผล่มา)" then
     _G.SelectedMonster = monsterValues[1]
 end
 
-Tabs.Farm:Dropdown({
+FarmSection:Dropdown({
     Title = "จุดยืนตอนโจมตี (Stand Position)",
     Desc = "ตำแหน่งที่คุณจะยืนเกาะมอนสเตอร์เวลาฟาร์ม (แนะนำ: ด้านหลัง)",
     Values = {"Behind", "On Head", "Under"},
@@ -191,7 +191,7 @@ Tabs.Farm:Dropdown({
     Callback = function(v) _G.FarmPosition = v end
 })
 
-Tabs.Farm:Button({
+FarmSection:Button({
     Title = "อัปเดตรายชื่อมอนสเตอร์ (Refresh List)",
     Desc = "กดเพื่อให้สคริปต์ค้นหามอนสเตอร์รอบๆ ตัวใหม่",
     Callback = function()
@@ -261,7 +261,7 @@ local function FindPosition(obj)
     return nil
 end
 
-Tabs.Teleport:Section({ Title = "📍 จุดวาร์ป (Teleporting)" })
+local TeleportSection = Tabs.Teleport:Section({ Title = "📍 จุดวาร์ป (Teleporting)" })
 
 local selectedCategory = "NPC"
 local selectedTarget = ""
@@ -277,8 +277,7 @@ local initTargets = ScanNPCs()
 if #initTargets == 0 then initTargets = {"(None Found)"} end
 selectedTarget = initTargets[1]
 
-local TargetDropdown
-TargetDropdown = Tabs.Teleport:Dropdown({
+local TargetDropdown = TeleportSection:Dropdown({
     Title = "รายชื่อปลายทาง (Target)",
     Values = initTargets,
     Value = initTargets[1],
@@ -292,7 +291,7 @@ local function RefreshTargetList()
     selectedTarget = targets[1]
 end
 
-Tabs.Teleport:Dropdown({
+TeleportSection:Dropdown({
     Title = "หมวดหมู่การวาร์ป (Category)",
     Desc = "เลือกประเภทของสิ่งที่คุณอยากวาร์ปไปหา",
     Values = {"NPC", "Qi", "Training"},
@@ -303,7 +302,7 @@ Tabs.Teleport:Dropdown({
     end,
 })
 
-Tabs.Teleport:Button({
+TeleportSection:Button({
     Title = "🚀 วาร์ปเลย (Start Teleport)",
     Desc = "ระบบจะบินข้ามแมพไปหาเป้าหมายอย่างปลอดภัย",
     Callback = function()
@@ -378,7 +377,7 @@ Tabs.Teleport:Button({
 })
 
 -- Stop Teleport
-Tabs.Teleport:Button({
+TeleportSection:Button({
     Title = "🛑 หยุดวาร์ป (Cancel)",
     Desc = "เบรกกลางอากาศทันที",
     Callback = function()
@@ -389,7 +388,7 @@ Tabs.Teleport:Button({
 })
 
 -- Refresh Targets
-Tabs.Teleport:Button({
+TeleportSection:Button({
     Title = "Refresh Targets",
     Desc = "Re-scan targets for current category.",
     Callback = function()
@@ -406,9 +405,9 @@ Tabs.Teleport:Button({
 -- ==========================================
 -- [ 7. Settings Tab ]
 -- ==========================================
-Tabs.Settings:Section({ Title = "⏱️ ความเร็วและเกราะป้องกัน" })
+local SettingsSection = Tabs.Settings:Section({ Title = "⏱️ ความเร็วและเกราะป้องกัน" })
 
-Tabs.Settings:Slider({
+SettingsSection:Slider({
     Title = "ระยะเข้าทำ (Attack Distance)",
     Desc = "ถ้าตีบอสไม่โดนหรือบินห่างเกินไป ให้ปรับลดเลขลงมา (หน่วย: Studs)",
     Step = 1,
@@ -416,14 +415,14 @@ Tabs.Settings:Slider({
     Callback = function(v) _G.AttackDistance = v end
 })
 
-Tabs.Settings:Slider({
+SettingsSection:Slider({
     Title = "ความเร็วการบิน (Fly Speed)",
     Step = 1,
     Value = { Min = 50, Max = 500, Default = 150 },
     Callback = function(v) _G.FlySpeed = v end
 })
 
-Tabs.Settings:Slider({
+SettingsSection:Slider({
     Title = "ความเร็วการโจมตี (Attack Cooldown Delay)",
     Desc = "ยิ่งเลขเยอะยิ่งตีช้า แต่จะเนียนตา ลดโอกาสโดนเกมแบน (หน่วย: มิลลิวินาที)",
     Step = 1,
@@ -431,7 +430,7 @@ Tabs.Settings:Slider({
     Callback = function(v) BASE_COOLDOWN = v / 1000 end
 })
 
-Tabs.Settings:Slider({
+SettingsSection:Slider({
     Title = "เลือดฉุกเฉิน Safety HP (%)",
     Desc = "ถ้าเลือดต่ำกว่าเปอร์เซ็นต์นี้ บอทจะหยุดฟาร์มทันทีเพื่อป้องกันตาย (ปรับเป็น 0 เพื่อปิด)",
     Step = 1,
@@ -442,11 +441,11 @@ Tabs.Settings:Slider({
 -- ==========================================
 -- [ 8. Misc Tab ]
 -- ==========================================
-Tabs.Misc:Section({ Title = "🛡️ ฟังก์ชันป้องกันเซิฟเวอร์" })
+local MiscSection = Tabs.Misc:Section({ Title = "🛡️ ฟังก์ชันป้องกันเซิฟเวอร์" })
 
-Tabs.Misc:Toggle({ Title = "ป้องกันการ AFK (Anti-AFK)", Default = true, Callback = function(v) _G.AntiAFK = v end })
+MiscSection:Toggle({ Title = "ป้องกันการ AFK (Anti-AFK)", Default = true, Callback = function(v) _G.AntiAFK = v end })
 
-Tabs.Misc:Toggle({ 
+MiscSection:Toggle({ 
     Title = "ระบบเตะผู้เล่นอื่น (Anti-Player)", 
     Desc = "เตะตัวเองออกจากเซิฟเวอร์ทันทีถ้ามีคนอื่นจอยเข้ามา (เหมาะสำหรับฟาร์มเซิฟ V แบบลับๆ)",
     Default = false,
