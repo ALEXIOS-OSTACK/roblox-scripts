@@ -444,6 +444,19 @@ local AntiPlayerToggle = Tabs.Misc:AddToggle("AntiPlayer", {
 -- ==========================================
 -- [ 9. Target Finder ]
 -- ==========================================
+local function IsValidTarget(targetModel)
+    local hum = targetModel:FindFirstChild("Humanoid")
+    local hrp = targetModel:FindFirstChild("HumanoidRootPart")
+    
+    if hum and hrp and hum.Health > 0 then
+        -- กรองซากศพที่เกมซ่อนไว้ (Transparency = 1 หรือหลุดหายไปจากฉาก)
+        if hrp.Transparency < 1 and targetModel.Parent ~= nil then
+            return true
+        end
+    end
+    return false
+end
+
 local function GetCurrentTarget()
     local enemies = workspace:FindFirstChild("Enemies")
     if not enemies then return nil end
@@ -453,12 +466,7 @@ local function GetCurrentTarget()
         for bossName, enabled in pairs(_G.SelectedBosses) do
             if enabled then
                 local b = enemies:FindFirstChild(bossName)
-                if b then
-                    local hum = b:FindFirstChild("Humanoid")
-                    if hum and hum.Health > 0 and b:FindFirstChild("HumanoidRootPart") then
-                        return b
-                    end
-                end
+                if b and IsValidTarget(b) then return b end
             end
         end
     end
@@ -467,10 +475,7 @@ local function GetCurrentTarget()
     if _G.SelectedMonster == "" then return nil end
     for _, e in ipairs(enemies:GetChildren()) do
         if e.Name == _G.SelectedMonster then
-            local hum = e:FindFirstChild("Humanoid")
-            if hum and hum.Health > 0 and e:FindFirstChild("HumanoidRootPart") then
-                return e
-            end
+            if IsValidTarget(e) then return e end
         end
     end
     return nil
@@ -525,8 +530,16 @@ task.spawn(function()
                 if distToTarget > 12 then
                     PhysicsFlyTo(standPos)
                 else
-                    StopPhysicsFly()
+                    -- อยู่ในระยะตีแล้ว: บังคับประกบติดเป้ามอนสเตอร์เสมอ
+                    if hrp:FindFirstChild("BypassPosition") and hrp.BypassPosition.Enabled then
+                        StopPhysicsFly()
+                    end
                     hrp.CFrame = standPos
+                    
+                    -- รีเซ็ตแรงเฉื่อยกันตัวไหลตอนตี
+                    hrp.AssemblyLinearVelocity = Vector3.zero
+                    hrp.AssemblyAngularVelocity = Vector3.zero
+                    
                     SafeAttack()
                 end
             else
