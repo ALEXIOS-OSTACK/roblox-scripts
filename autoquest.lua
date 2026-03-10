@@ -433,103 +433,192 @@ local AntiPlayerToggle = Tabs.Misc:AddToggle("AntiPlayer", {
 })
 
 -- ==========================================
--- [ 9. Target Finder ]
+-- [ 9. Target Finder (S-Tier Distance Caching) ]
 -- ==========================================
-local function GetCurrentTarget()
-    local enemies = workspace:FindFirstChild("Enemies")
-    if not enemies then return nil end
+local cachedTarget = nil
 
-    -- Boss Priority: search for bosses first
-    if _G.BossPriority then
-        for bossName, enabled in pairs(_G.SelectedBosses) do
-            if enabled then
-                local b = enemies:FindFirstChild(bossName)
-                if b and b:FindFirstChild("Humanoid") and b.Humanoid.Health > 0
-                   and b:FindFirstChild("HumanoidRootPart") then
-                    return b
+local function IsValid(model)
+    if not model or not model.Parent then return false end
+    local hum = model:FindFirstChildOfClass("Humanoid")
+    local hrp = model:FindFirstChild("HumanoidRootPart") or model.PrimaryPart
+    if hum and hrp and hum.Health > 0 then
+        -- Avoid targeting completely invisible root parts if that's a corpse mechanic
+        if hrp.Name == "HumanoidRootPart" and hrp.Transparency >= 1 and hum.Health <= 0 then
+            return false
+        end
+        return true
+    end
+    return false
+end
+
+local function GetOptimalTarget()
+    -- 1. Check if cache is still valid
+    if cachedTarget and IsValid(cachedTarget) then
+        return cachedTarget
+    end
+    
+    -- Cache invalid, scan for new target
+    cachedTarget = nil
+    local enemiesFolder = workspace:FindFirstChild("Enemies")
+    if not enemiesFolder then return nil end
+    
+    local char = LocalPlayer.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return nil end
+    
+    local myPos = hrp.Position
+    local bestTarget = nil
+    local bestScore = math.huge -- Lower is better (distance)
+    
+    -- 2. Scan all enemies in ONE loop
+    for _, e in ipairs(enemiesFolder:GetChildren()) do
+        if IsValid(e) then
+            local targetPos = (e:FindFirstChild("HumanoidRootPart") or e.PrimaryPart).Position
+            local dist = (myPos - targetPos).Magnitude
+            
+            -- Score logic
+            local isBoss = _G.BossPriority and _G.SelectedBosses[e.Name]
+            local isSelectedMob = (e.Name == _G.SelectedMonster)
+            
+            if isBoss then
+                -- Bosses have absolute priority, negative distance score
+                local score = dist - 999999
+                if score < bestScore then
+                    bestScore = score
+                    bestTarget = e
+                end
+            elseif isSelectedMob then
+                -- Regular mobs ranked purely by distance
+                if dist < bestScore then
+                    bestScore = dist
+                    bestTarget = e
                 end
             end
         end
-        -- If no boss alive, fall through to regular mobs
     end
-
-    -- Find selected monster
-    if _G.SelectedMonster == "" then return nil end
-    for _, e in ipairs(enemies:GetChildren()) do
-        if e.Name == _G.SelectedMonster then
-            local hum = e:FindFirstChild("Humanoid")
-            if hum and hum.Health > 0 and e:FindFirstChild("HumanoidRootPart") then
-                return e
+    
+    -- 3. Ultimate Fallback: If strict names failed but we need ANY target
+    if not bestTarget and _G.SelectedMonster ~= "" then
+        for _, e in ipairs(enemiesFolder:GetChildren()) do
+            if IsValid(e) then
+                local targetPos = (e:FindFirstChild("HumanoidRootPart") or e.PrimaryPart).Position
+                local dist = (myPos - targetPos).Magnitude
+                if dist < bestScore then
+                    bestScore = dist
+                    bestTarget = e
+                end
             end
         end
     end
-    return nil
+    
+    cachedTarget = bestTarget
+    return cachedTarget
 end
 
 -- ==========================================
--- [ 10. Main Farm Loop ]
+-- [ 10. Main Farm Loop (S-Tier State Machine) ]
 -- ==========================================
+local STATE_IDLE = 0
+local STATE_MOVING = 1
+local STATE_ATTACKING = 2
+
+local currentState = STATE_IDLE
+local stuckTimer = 0
+local lastPosition = Vector3.zero
+
 task.spawn(function()
-    while task.wait(0.1 + math.random() * 0.05) do
+    while task.wait(0.05) do -- Fast 20 TPS loop, lighter than Stepped but fast enough for combat
         if not _G.AutoFarm then
-            StopPhysicsFly()
-        else
-            -- HP Safety Check
-            local char = LocalPlayer.Character
-            local hum = char and char:FindFirstChildOfClass("Humanoid")
-            if hum and _G.MinHP > 0 then
-                local hpPct = hum.Health / hum.MaxHealth * 100
-                if hpPct < _G.MinHP then
-                    StopPhysicsFly()
-                    if _G.AutoFarm then
-                        _G.AutoFarm = false
-                        pcall(function() FarmToggle:SetValue(false) end)
-                        Fluent:Notify({
-                            Title = "Warning: Low HP!",
-                            Content = "HP at " .. math.floor(hpPct) .. "% — Auto Farm stopped for safety.",
-                            Duration = 5
-                        })
-                    end
-                    continue
-                end
+            if currentState ~= STATE_IDLE then
+                StopPhysicsFly()
+                currentState = STATE_IDLE
             end
+            continue
+        end
 
-            local target = GetCurrentTarget()
-            local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        -- HP Safety Check
+        local char = LocalPlayer.Character
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        
+        if not char or not hum or not hrp then continue end
+        
+        if _G.MinHP > 0 then
+            local hpPct = (hum.Health / hum.MaxHealth) * 100
+            if hpPct < _G.MinHP then
+                StopPhysicsFly()
+                _G.AutoFarm = false
+                pcall(function() FarmToggle:SetValue(false) end)
+                Fluent:Notify({
+                    Title = "Warning: Low HP!",
+                    Content = "HP dropped below " .. _G.MinHP .. "% — Auto Farm stopped.",
+                    Duration = 5
+                })
+                continue
+            end
+        end
 
-            if target and hrp then
-                local targetRoot = target.HumanoidRootPart
+        -- Target Acquisition
+        local target = GetOptimalTarget()
+        
+        if not target then
+            if currentState ~= STATE_IDLE then
+                StopPhysicsFly()
+                currentState = STATE_IDLE
+            end
+            continue
+        end
 
-                -- Calculate stand position
-                local offset
-                if _G.FarmPosition == "On Head" then
-                    offset = CFrame.new(0, 4, 0)
-                elseif _G.FarmPosition == "Under" then
-                    offset = CFrame.new(0, -3, 0)
-                else
-                    offset = CFrame.new(0, 0, 3)  -- Behind (default)
-                end
-                local standPos = targetRoot.CFrame * offset
-                local distToTarget = (hrp.Position - targetRoot.Position).Magnitude
+        local targetRoot = target:FindFirstChild("HumanoidRootPart") or target.PrimaryPart
+        if not targetRoot then
+            cachedTarget = nil -- Force retarget if broke
+            continue
+        end
 
-                if distToTarget > 12 then
-                    PhysicsFlyTo(standPos)
-                else
-                    -- อยู่ในระยะตีแล้ว: บังคับประกบติดเป้ามอนสเตอร์เสมอ
-                    if hrp:FindFirstChild("BypassPosition") then
-                        StopPhysicsFly()
-                    end
-                    hrp.CFrame = standPos
-                    
-                    -- รีเซ็ตแรงเฉื่อยกันตัวไหลตอนตี
-                    hrp.AssemblyLinearVelocity = Vector3.zero
-                    hrp.AssemblyAngularVelocity = Vector3.zero
-                    
-                    SafeAttack()
+        -- Calculate stand position
+        local offset
+        if _G.FarmPosition == "On Head" then
+            offset = CFrame.new(0, 4, 0)
+        elseif _G.FarmPosition == "Under" then
+            offset = CFrame.new(0, -4, 0)
+        else
+            offset = CFrame.new(0, 0, 3) 
+        end
+        local standPos = targetRoot.CFrame * offset
+        local distToTarget = (hrp.Position - targetRoot.Position).Magnitude
+
+        -- State Machine Evaluation
+        if distToTarget > 12 then
+            -- STATE: MOVING
+            currentState = STATE_MOVING
+            PhysicsFlyTo(standPos)
+            
+            -- Anti-Stuck System (S-Tier Feature)
+            if (hrp.Position - lastPosition).Magnitude < 2 then
+                stuckTimer = stuckTimer + 0.05
+                if stuckTimer > 5 then -- Stuck for 5 seconds
+                    cachedTarget = nil -- Force pick a new target
+                    stuckTimer = 0
                 end
             else
-                StopPhysicsFly()
+                stuckTimer = 0
             end
+            lastPosition = hrp.Position
+            
+        else
+            -- STATE: ATTACKING
+            if currentState == STATE_MOVING then
+                StopPhysicsFly() -- Clean stop
+            end
+            currentState = STATE_ATTACKING
+            
+            -- Absolute CFrame Lock
+            hrp.CFrame = standPos
+            hrp.AssemblyLinearVelocity = Vector3.zero
+            hrp.AssemblyAngularVelocity = Vector3.zero
+            
+            SafeAttack()
+            stuckTimer = 0 -- Reset anti-stuck in combat
         end
     end
 end)
