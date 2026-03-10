@@ -23,35 +23,41 @@ _G.AttackDistance = 2
 local BossList = {"Zanshi Bing Ren", "Zanshi Huo Ren", "Mount Hua Leader"}
 
 -- ==========================================
--- [ 2. Compact UI Initialization ]
+-- [ 2. Fluent UI Initialization ]
 -- ==========================================
-local library = loadstring(game:HttpGet("https://raw.githubusercontent.com/cueshut/saves/main/compact"))()
-local Window = library.init("Private Auto Farm", "v6.0", "AutoFarmConfig", nil, UDim2.new(0, 600, 0, 400))
+local Fluent = loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
+local SaveManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/dawid-scripts/Fluent/main/Addons/SaveManager.lua"))()
+local InterfaceManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/dawid-scripts/Fluent/main/Addons/InterfaceManager.lua"))()
 
-local function Notify(title, desc)
-    -- Compact UI doesn't have a built in notify we saw, but we can print or use Roblox StarterGui
-    game:GetService("StarterGui"):SetCore("SendNotification", {
-        Title = title;
-        Text = desc;
-        Duration = 5;
-    })
-end
+local Window = Fluent:CreateWindow({
+    Title = "Fisch Auto Farm v6.0",
+    SubTitle = "by Private Scr",
+    TabWidth = 160,
+    Size = UDim2.fromOffset(580, 460),
+    Acrylic = true,
+    Theme = "Dark",
+    MinimizeKey = Enum.KeyCode.RightControl
+})
 
 -- ==========================================
--- [ 3. Setup Tabs & Panels ]
+-- [ 3. Setup Tabs ]
 -- ==========================================
-local TabFarm = Window:AddTab("Farm")
-local FarmPanelCombat = TabFarm:AddPanel("Combat")
+local Tabs = {
+    Farm = Window:AddTab({ Title = "Farm", Icon = "swords" }),
+    Teleport = Window:AddTab({ Title = "Teleport", Icon = "map-pin" }),
+    Settings = Window:AddTab({ Title = "Settings", Icon = "settings" })
+}
 
-local TabTeleport = Window:AddTab("Teleport")
-local TeleportPanelTargets = TabTeleport:AddPanel("Targets")
-local TeleportPanelActions = TabTeleport:AddPanel("Actions")
+SaveManager:SetLibrary(Fluent)
+InterfaceManager:SetLibrary(Fluent)
 
-local TabSettings = Window:AddTab("Settings")
-local SettingsPanelAdjust = TabSettings:AddPanel("Adjustments")
-local SettingsPanelProtect = TabSettings:AddPanel("Protection")
+SaveManager:IgnoreThemeSettings()
+SaveManager:SetIgnoreIndexes({})
 
--- (Tabs are initialized above)
+InterfaceManager:SetFolder("FluentSettings")
+SaveManager:SetFolder("FluentSettings/FischAutoFarm")
+
+Window:SelectTab(1)
 
 -- (Farm Entities)
 local function ScanMonsters()
@@ -196,98 +202,183 @@ end
 -- [ 4. Build Components in UI ]
 -- ==========================================
 -- FARM TAB
-FarmPanelCombat:AddToggle({title = "Start Auto Farm", checked = false, callback = function(v) _G.AutoFarm = v end})
-FarmPanelCombat:AddToggle({title = "Priority Boss", checked = false, callback = function(v) _G.BossPriority = v end})
+Tabs.Farm:AddParagraph({Title = "🔥 Combat Options", Content = "Configure your auto-farming behavior."})
 
-FarmPanelCombat:AddDropdown({title = "Stand Position", options = {"Behind", "On Head", "Under"}, default = "Behind", callback = function(v) _G.FarmPosition = v end})
+Tabs.Farm:AddToggle("TogAutoFarm", {
+    Title = "Start Auto Farm",
+    Default = false,
+    Callback = function(v) _G.AutoFarm = v end
+})
+
+Tabs.Farm:AddToggle("TogPriorityBoss", {
+    Title = "Priority Boss",
+    Default = false,
+    Callback = function(v) _G.BossPriority = v end
+})
+
+Tabs.Farm:AddDropdown("DropStandPos", {
+    Title = "Stand Position",
+    Values = {"Behind", "On Head", "Under"},
+    Multi = false,
+    Default = 1,
+    Callback = function(v) _G.FarmPosition = v end
+})
 
 local mVals = ScanMonsters()
 if #mVals == 0 then mVals = {"(None)"} end
 
-local mobDropdownData = {title = "Select Monster", options = mVals, default = mVals[1], callback = function(v) _G.SelectedMonster = v end}
-FarmPanelCombat:AddDropdown(mobDropdownData) -- We cannot dynamically update options in this library easily without destroying it, so we rely on script restarts for new mobs or static lists.
+local DropMonster = Tabs.Farm:AddDropdown("DropMonster", {
+    Title = "Select Monster",
+    Values = mVals,
+    Multi = false,
+    Default = 1,
+    Callback = function(v) _G.SelectedMonster = v end
+})
 
-FarmPanelCombat:AddButton({title = "Refresh Monsters (Check Console)", callback = function()
-    local nm = ScanMonsters()
-    if #nm == 0 then nm = {"(None)"} end
-    print("New monsters found:", table.concat(nm, ", "))
-    Notify("Look in F9", "Cannot update dropdown dynamically, please restart script or check F9 log.")
-end})
+Tabs.Farm:AddButton({
+    Title = "Refresh Monsters",
+    Callback = function()
+        local nm = ScanMonsters()
+        if #nm == 0 then nm = {"(None)"} end
+        DropMonster:SetValues(nm)
+        DropMonster:SetValue(nm[1])
+        Fluent:Notify({ Title = "Refreshed", Content = "Monster list updated.", Duration = 3 })
+    end
+})
 
 
 -- TELEPORT TAB
-local targetDropdownData = {title = "Target", options = initTargets, default = initTargets[1], callback = function(v) selectedTarget = v end}
-TeleportPanelTargets:AddDropdown(targetDropdownData)
+Tabs.Teleport:AddParagraph({Title = "📍 Teleport Actions", Content = "Instantly move to specific NPCs or zones."})
 
--- We cannot update options dynamically in Compact UI easily, so category switching is disabled.
-TeleportPanelTargets:AddDropdown({title = "Category", options = {"NPC", "Qi", "Training"}, default = "NPC", callback = function(v)
-    selectedCategory = v
-    Notify("Note", "Category updated. Re-execute script to update visual target list.")
-end})
+local DropTarget = Tabs.Teleport:AddDropdown("DropTarget", {
+    Title = "Select Target",
+    Values = initTargets,
+    Multi = false,
+    Default = 1,
+    Callback = function(v) selectedTarget = v end
+})
 
-TeleportPanelActions:AddButton({title = "🚀 Start Teleport", callback = function()
-    if selectedTarget == "(None Found)" or selectedTarget == "" then
-        Notify("Error", "Please select a target!")
-        return
+Tabs.Teleport:AddDropdown("DropCategory", {
+    Title = "Filter Category",
+    Values = {"NPC", "Qi", "Training"},
+    Multi = false,
+    Default = 1,
+    Callback = function(v)
+        selectedCategory = v
+        local tVals = FetchTargetsByCategory(selectedCategory)
+        DropTarget:SetValues(tVals)
+        DropTarget:SetValue(tVals[1])
     end
+})
 
-    local targetObj = nil
-    if selectedCategory == "NPC" then
-        local folder = workspace:FindFirstChild("NPCs")
-        if folder then targetObj = folder:FindFirstChild(selectedTarget) end
-    elseif selectedCategory == "Qi" then
-        local tz = workspace:FindFirstChild("Training Zones")
-        local folder = tz and tz:FindFirstChild("Qi")
-        if folder then targetObj = folder:FindFirstChild(selectedTarget) end
-    elseif selectedCategory == "Training" then
-        local tz = workspace:FindFirstChild("Training Zones")
-        local folder = tz and tz:FindFirstChild("Training")
-        if folder then targetObj = folder:FindFirstChild(selectedTarget) end
-    end
+Tabs.Teleport:AddButton({
+    Title = "🚀 Start Teleport",
+    Callback = function()
+        if selectedTarget == "(None Found)" or selectedTarget == "" then
+            return Fluent:Notify({ Title = "Error", Content = "Please select a target!", Duration = 3 })
+        end
 
-    if not targetObj then return Notify("Error", "Target not found.") end
-    local targetCF = FindPosition(targetObj)
-    if not targetCF then return Notify("Error", "Can't get position.") end
+        local targetObj = nil
+        if selectedCategory == "NPC" then
+            local folder = workspace:FindFirstChild("NPCs")
+            if folder then targetObj = folder:FindFirstChild(selectedTarget) end
+        elseif selectedCategory == "Qi" then
+            local tz = workspace:FindFirstChild("Training Zones")
+            local folder = tz and tz:FindFirstChild("Qi")
+            if folder then targetObj = folder:FindFirstChild(selectedTarget) end
+        elseif selectedCategory == "Training" then
+            local tz = workspace:FindFirstChild("Training Zones")
+            local folder = tz and tz:FindFirstChild("Training")
+            if folder then targetObj = folder:FindFirstChild(selectedTarget) end
+        end
 
-    local destination = selectedCategory == "NPC" and targetCF * CFrame.new(0, 0, 5) or targetCF
-    local hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-    if hrp then
-        _G.AutoFarm = false
-        StopFlying()
-        _G.Teleporting = true
-        Notify("Teleporting", "Flying to " .. selectedTarget)
-        task.spawn(function()
-            while _G.Teleporting do
-                local chrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-                if not chrp then break end
-                if (chrp.Position - destination.Position).Magnitude < 10 then
-                    StopFlying()
-                    _G.Teleporting = false
-                    Notify("Arrived", "Reached " .. selectedTarget)
-                    break
+        if not targetObj then return Fluent:Notify({ Title = "Error", Content = "Target not found.", Duration = 3 }) end
+        local targetCF = FindPosition(targetObj)
+        if not targetCF then return Fluent:Notify({ Title = "Error", Content = "Can't get position.", Duration = 3 }) end
+
+        local destination = selectedCategory == "NPC" and targetCF * CFrame.new(0, 0, 5) or targetCF
+        local hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+        if hrp then
+            _G.AutoFarm = false
+            StopFlying()
+            _G.Teleporting = true
+            Fluent:Notify({ Title = "Teleporting", Content = "Flying to " .. selectedTarget, Duration = 3 })
+            task.spawn(function()
+                while _G.Teleporting do
+                    local chrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+                    if not chrp then break end
+                    if (chrp.Position - destination.Position).Magnitude < 10 then
+                        StopFlying()
+                        _G.Teleporting = false
+                        Fluent:Notify({ Title = "Arrived", Content = "Reached " .. selectedTarget, Duration = 3 })
+                        break
+                    end
+                    FlyToTarget(destination)
+                    task.wait(0.1)
                 end
-                FlyToTarget(destination)
-                task.wait(0.1)
-            end
-        end)
+            end)
+        end
     end
-end})
+})
 
-TeleportPanelActions:AddButton({title = "🛑 Cancel Teleport", callback = function()
-    _G.Teleporting = false
-    StopFlying()
-    Notify("Cancelled", "Teleport stopped.")
-end})
+Tabs.Teleport:AddButton({
+    Title = "🛑 Cancel Teleport",
+    Callback = function()
+        _G.Teleporting = false
+        StopFlying()
+        Fluent:Notify({ Title = "Cancelled", Content = "Teleport stopped.", Duration = 3 })
+    end
+})
 
 
 -- SETTINGS TAB
-SettingsPanelAdjust:AddSlider({title = "Attack Distance", min = -5, max = 15, default = 2, callback = function(v) _G.AttackDistance = v end})
-SettingsPanelAdjust:AddSlider({title = "Fly Speed", min = 50, max = 500, default = 150, callback = function(v) _G.FlySpeed = v end})
-SettingsPanelAdjust:AddSlider({title = "Attack Cooldown (ms)", min = 10, max = 100, default = 18, callback = function(v) BASE_COOLDOWN = v / 1000 end})
-SettingsPanelAdjust:AddSlider({title = "Safety HP %", min = 0, max = 90, default = 30, callback = function(v) _G.MinHP = v end})
+Tabs.Settings:AddParagraph({Title = "⚙️ Adjustments", Content = "Tweak combat logic and server protections."})
 
-SettingsPanelProtect:AddToggle({title = "Anti-AFK", checked = true, callback = function(v) _G.AntiAFK = v end})
-SettingsPanelProtect:AddToggle({title = "Anti-Player", checked = false, callback = function(v) _G.AntiPlayer = v end})
+Tabs.Settings:AddSlider("SldDistance", {
+    Title = "Attack Distance",
+    Description = "Offset distance from target",
+    Default = 2,
+    Min = -5,
+    Max = 15,
+    Rounding = 1,
+    Callback = function(v) _G.AttackDistance = v end
+})
+
+Tabs.Settings:AddSlider("SldSpeed", {
+    Title = "Fly Speed",
+    Description = "Velocity across map",
+    Default = 150,
+    Min = 50,
+    Max = 500,
+    Rounding = 0,
+    Callback = function(v) _G.FlySpeed = v end
+})
+
+Tabs.Settings:AddSlider("SldCooldown", {
+    Title = "Attack Cooldown (ms)",
+    Description = "Delay between hits based on weapon",
+    Default = 18,
+    Min = 10,
+    Max = 100,
+    Rounding = 0,
+    Callback = function(v) BASE_COOLDOWN = v / 1000 end
+})
+
+Tabs.Settings:AddSlider("SldSafetyHP", {
+    Title = "Safety HP %",
+    Description = "Auto-stops farm if health is low",
+    Default = 30,
+    Min = 0,
+    Max = 90,
+    Rounding = 0,
+    Callback = function(v) _G.MinHP = v end
+})
+
+Tabs.Settings:AddToggle("TogAntiAFK", { Title = "Anti-AFK", Default = true, Callback = function(v) _G.AntiAFK = v end })
+Tabs.Settings:AddToggle("TogAntiPlayer", { Title = "Anti-Player", Default = false, Callback = function(v) _G.AntiPlayer = v end })
+
+InterfaceManager:BuildInterfaceSection(Tabs.Settings)
+SaveManager:BuildConfigSection(Tabs.Settings)
 
 -- ==========================================
 -- [ 5. Target Finder & State Machine ]
@@ -354,8 +445,7 @@ task.spawn(function()
             if hpPct < _G.MinHP then
                 StopFlying()
                 _G.AutoFarm = false
-                FarmState = "IDLE"
-                UI.Notify("Low HP!", "Auto Farm stopped.")
+                Fluent:Notify({ Title = "Low HP!", Content = "Auto Farm stopped for safety.", Duration = 4 })
                 continue
             end
         end
@@ -435,4 +525,5 @@ LocalPlayer.Idled:Connect(function()
     end
 end)
 
-Notify("Inject Success", "Compact UI loaded.")
+Fluent:Notify({ Title = "Inject Success", Content = "Fluent UI restored.", Duration = 3 })
+SaveManager:LoadAutoloadConfig()
