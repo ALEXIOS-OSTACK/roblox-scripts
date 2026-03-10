@@ -444,12 +444,9 @@ local function GetCurrentTarget()
         for bossName, enabled in pairs(_G.SelectedBosses) do
             if enabled then
                 local b = enemies:FindFirstChild(bossName)
-                if b and b.Parent == enemies then
-                    local hum = b:FindFirstChild("Humanoid")
-                    local hrp = b:FindFirstChild("HumanoidRootPart")
-                    if hum and hum.Health > 0 and hrp and hrp.Transparency < 1 then
-                        return b
-                    end
+                if b and b:FindFirstChild("Humanoid") and b.Humanoid.Health > 0
+                   and b:FindFirstChild("HumanoidRootPart") then
+                    return b
                 end
             end
         end
@@ -461,11 +458,8 @@ local function GetCurrentTarget()
     for _, e in ipairs(enemies:GetChildren()) do
         if e.Name == _G.SelectedMonster then
             local hum = e:FindFirstChild("Humanoid")
-            if hum and hum.Health > 0 then
-                local hrp = e:FindFirstChild("HumanoidRootPart")
-                if hrp and hrp.Transparency < 1 then
-                    return e
-                end
+            if hum and hum.Health > 0 and e:FindFirstChild("HumanoidRootPart") then
+                return e
             end
         end
     end
