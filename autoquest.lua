@@ -432,29 +432,9 @@ local AntiPlayerToggle = Tabs.Misc:AddToggle("AntiPlayer", {
     Default = false 
 })
 
-local GhostBlacklist = {}
-local targetStuckTimer = 0
-local lastTargetHealth = -1
-local currentTrackedTarget = nil
-
 -- ==========================================
--- [ 9. Target Finder (Pure Reactive Scanning) ]
+-- [ 9. Target Finder (Basic Reactive) ]
 -- ==========================================
-local function IsValid(model)
-    if not model or not model.Parent then return false end
-    if model.Parent.Name ~= "Enemies" then return false end
-    if GhostBlacklist[model] and tick() < GhostBlacklist[model] then return false end
-    
-    local hum = model:FindFirstChildOfClass("Humanoid")
-    local hrp = model:FindFirstChild("HumanoidRootPart") or model.PrimaryPart
-    
-    if hum and hrp and hum.Health > 0 then
-        if hum:GetState() == Enum.HumanoidStateType.Dead then return false end
-        return true
-    end
-    return false
-end
-
 local function GetOptimalTarget()
     local enemiesFolder = workspace:FindFirstChild("Enemies")
     if not enemiesFolder then return nil end
@@ -470,10 +450,10 @@ local function GetOptimalTarget()
     local bestMobScore = math.huge
     
     for _, e in ipairs(enemiesFolder:GetChildren()) do
-        if IsValid(e) then
-            local targetPos = (e:FindFirstChild("HumanoidRootPart") or e.PrimaryPart).Position
-            local dist = (myPos - targetPos).Magnitude
-            
+        local hum = e:FindFirstChildOfClass("Humanoid")
+        local root = e:FindFirstChild("HumanoidRootPart") or e.PrimaryPart
+        if hum and root and hum.Health > 0.1 and hum:GetState() ~= Enum.HumanoidStateType.Dead then
+            local dist = (myPos - root.Position).Magnitude
             if _G.BossPriority and _G.SelectedBosses[e.Name] then
                 if dist < bestBossScore then
                     bestBossScore = dist
@@ -493,23 +473,12 @@ local function GetOptimalTarget()
 end
 
 -- ==========================================
--- [ 10. Main Farm Loop (Bulletproof State Machine) ]
+-- [ 10. Main Farm Loop (Basic Framework) ]
 -- ==========================================
-local STATE_IDLE = 0
-local STATE_MOVING = 1
-local STATE_ATTACKING = 2
-
-local currentState = STATE_IDLE
-local stuckTimer = 0
-local lastPosition = Vector3.zero
-
 task.spawn(function()
-    while task.wait(0.05) do
+    while task.wait() do
         if not _G.AutoFarm then
-            if currentState ~= STATE_IDLE then
-                StopPhysicsFly()
-                currentState = STATE_IDLE
-            end
+            StopPhysicsFly()
             continue
         end
 
@@ -531,74 +500,41 @@ task.spawn(function()
 
         local target = GetOptimalTarget()
         
-        if currentTrackedTarget ~= target then
-            currentTrackedTarget = target
-            targetStuckTimer = 0
-            lastTargetHealth = -1
-        end
-        
-        if not target then
-            if currentState ~= STATE_IDLE then
-                StopPhysicsFly()
-                currentState = STATE_IDLE
+        if target then
+            if target ~= _G.LastNotifiedTarget then
+                _G.LastNotifiedTarget = target
+                Fluent:Notify({ Title = "Target Locked", Content = "Now attacking: " .. target.Name, Duration = 2 })
             end
-            continue
-        end
-
-        local targetRoot = target:FindFirstChild("HumanoidRootPart") or target.PrimaryPart
-        if not targetRoot then continue end
-
-        -- Hardcoded Rock-Solid Stand Positions
-        local offset
-        if _G.FarmPosition == "On Head" then
-            offset = CFrame.new(0, 5, 0)
-        elseif _G.FarmPosition == "Under" then
-            offset = CFrame.new(0, -6, 0)
-        else
-            offset = CFrame.new(0, 0, 4) 
-        end
-        
-        local standPos = targetRoot.CFrame * offset
-        local distToTarget = (hrp.Position - targetRoot.Position).Magnitude
-
-        -- State Machine Evaluation
-        if distToTarget > 12 then -- Safe approach distance to let weapons hit without clipping
-            -- STATE: MOVING
-            currentState = STATE_MOVING
-            PhysicsFlyTo(standPos)
             
-        else
-            -- STATE: ATTACKING
-            if currentState == STATE_MOVING then StopPhysicsFly() end
-            currentState = STATE_ATTACKING
-            
-            hrp.CFrame = standPos
-            hrp.AssemblyLinearVelocity = Vector3.zero
-            hrp.AssemblyAngularVelocity = Vector3.zero
-            
-            SafeAttack()
-            
-            -- Boss Corpse Filter: Only blacklist BOSSES if they take 0 damage for 5 seconds.
-            if _G.BossPriority and _G.SelectedBosses[target.Name] then
-                local currentHP = targetHum.Health
-                if lastTargetHealth == -1 or currentHP >= lastTargetHealth then
-                    targetStuckTimer = targetStuckTimer + 0.05
-                    if targetStuckTimer > 5 then
-                        pcall(function() Fluent:Notify({ Title = "Ghost Boss Skipped", Content = "Boss corpse detected! Blacklisting 60s.", Duration = 3 }) end)
-                        GhostBlacklist[target] = tick() + 60
-                        targetStuckTimer = 0
-                        lastTargetHealth = -1
-                        currentTrackedTarget = nil
-                    end
+            local targetRoot = target:FindFirstChild("HumanoidRootPart") or target.PrimaryPart
+            if targetRoot then
+                local offset
+                if _G.FarmPosition == "On Head" then
+                    offset = CFrame.new(0, 7, 0)
+                elseif _G.FarmPosition == "Under" then
+                    offset = CFrame.new(0, -7, 0)
                 else
-                    targetStuckTimer = 0
+                    offset = CFrame.new(0, 0, 5) 
                 end
-                lastTargetHealth = currentHP
-            else
-                -- Normal Mobs NEVER get blacklisted. 
-                targetStuckTimer = 0
-                lastTargetHealth = -1
+                
+                local standPos = targetRoot.CFrame * offset
+                
+                -- Always fly blindly towards it
+                PhysicsFlyTo(standPos)
+                
+                -- Always attack blindly
+                SafeAttack()
+                
+                -- Hard lock velocity if close to prevent spinning
+                local distToTarget = (hrp.Position - targetRoot.Position).Magnitude
+                if distToTarget < 10 then
+                    hrp.CFrame = standPos
+                    hrp.AssemblyLinearVelocity = Vector3.zero
+                    hrp.AssemblyAngularVelocity = Vector3.zero
+                end
             end
+        else
+            StopPhysicsFly()
         end
     end
 end)
