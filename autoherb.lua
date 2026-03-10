@@ -31,7 +31,7 @@ for _, v in ipairs(coreGui:GetChildren()) do
     preExistingGuis[v] = true
 end
 
-local MacLib = loadstring(game:HttpGet("https://github.com/biggaboy212/Maclib/releases/latest/download/maclib.lua"))()
+local MacLib = loadstring(game:HttpGet("https://raw.githubusercontent.com/biggaboy212/Maclib/main/maclib.lua"))()
 
 local Window = MacLib:Window({
 	Title = "Private Auto Farm",
