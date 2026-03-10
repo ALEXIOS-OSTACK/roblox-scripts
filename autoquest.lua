@@ -237,18 +237,12 @@ end
 -- Get position of object (supports Model and BasePart)
 local function GetPosition(obj)
     if obj:IsA("Model") then
-        local hrp = obj:FindFirstChild("HumanoidRootPart")
+        local hrp = obj:FindFirstChild("HumanoidRootPart") or obj:FindFirstChild("Head")
         if hrp then return hrp.CFrame end
-        
-        local head = obj:FindFirstChild("Head") 
-        if head then return head.CFrame end
-        
         if obj.PrimaryPart then return obj.PrimaryPart.CFrame end
-        
-        -- Fallback fast search (better than GetDescendants)
-        local part = obj:FindFirstChildWhichIsA("BasePart")
-        if part then return part.CFrame end
-        
+        for _, child in ipairs(obj:GetDescendants()) do
+            if child:IsA("BasePart") then return child.CFrame end
+        end
     elseif obj:IsA("BasePart") then
         return obj.CFrame
     end
@@ -444,19 +438,6 @@ local AntiPlayerToggle = Tabs.Misc:AddToggle("AntiPlayer", {
 -- ==========================================
 -- [ 9. Target Finder ]
 -- ==========================================
-local function IsValidTarget(targetModel)
-    local hum = targetModel:FindFirstChild("Humanoid")
-    local hrp = targetModel:FindFirstChild("HumanoidRootPart")
-    
-    if hum and hrp and hum.Health > 0 then
-        -- กรองซากศพที่เกมซ่อนไว้ (Transparency = 1 หรือหลุดหายไปจากฉาก)
-        if hrp.Transparency < 1 and targetModel.Parent ~= nil then
-            return true
-        end
-    end
-    return false
-end
-
 local function GetCurrentTarget()
     local enemies = workspace:FindFirstChild("Enemies")
     if not enemies then return nil end
@@ -466,16 +447,23 @@ local function GetCurrentTarget()
         for bossName, enabled in pairs(_G.SelectedBosses) do
             if enabled then
                 local b = enemies:FindFirstChild(bossName)
-                if b and IsValidTarget(b) then return b end
+                if b and b:FindFirstChild("Humanoid") and b.Humanoid.Health > 0
+                   and b:FindFirstChild("HumanoidRootPart") then
+                    return b
+                end
             end
         end
+        -- If no boss alive, fall through to regular mobs
     end
 
-    -- Find selected monster safely
+    -- Find selected monster
     if _G.SelectedMonster == "" then return nil end
     for _, e in ipairs(enemies:GetChildren()) do
         if e.Name == _G.SelectedMonster then
-            if IsValidTarget(e) then return e end
+            local hum = e:FindFirstChild("Humanoid")
+            if hum and hum.Health > 0 and e:FindFirstChild("HumanoidRootPart") then
+                return e
+            end
         end
     end
     return nil
