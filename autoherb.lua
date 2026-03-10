@@ -16,7 +16,6 @@ _G.FarmPosition  = "Behind"
 _G.FlySpeed      = 150
 _G.MinHP         = 30
 _G.Teleporting   = false
-_G.BringMobs     = false
 
 local BossList = {"Zanshi Bing Ren", "Zanshi Huo Ren", "Mount Hua Leader"}
 
@@ -132,26 +131,10 @@ local function SafeAttack()
                 char.Humanoid:EquipTool(tool)
             end
             tool:Activate()
-            -- If BringMobs is on, we do AoE (hit everything near us)
-            if _G.BringMobs and ReplicatedStorage:FindFirstChild("RemoteEvents") then
-                local enemiesFolder = workspace:FindFirstChild("Enemies")
-                if enemiesFolder then
-                    for _, e in ipairs(enemiesFolder:GetChildren()) do
-                        local mobRoot = e:FindFirstChild("HumanoidRootPart")
-                        local mobHum = e:FindFirstChildOfClass("Humanoid")
-                        if mobRoot and mobHum and mobHum.Health > 0 then
-                            local dist = (hrp.Position - mobRoot.Position).Magnitude
-                            if dist < 25 then -- AoE Range
-                                ReplicatedStorage.RemoteEvents.Attack:FireServer("Light", { ["RootPart"] = mobRoot })
-                            end
-                        end
-                    end
-                end
-            else
-                -- Normal single target attack
-                if tool:IsA("Tool") and ReplicatedStorage:FindFirstChild("RemoteEvents") then
-                    ReplicatedStorage.RemoteEvents.Attack:FireServer("Light", { ["RootPart"] = hrp })
-                end
+            
+            -- Normal single target attack
+            if tool:IsA("Tool") and ReplicatedStorage:FindFirstChild("RemoteEvents") then
+                ReplicatedStorage.RemoteEvents.Attack:FireServer("Light", { ["RootPart"] = hrp })
             end
         end
     end)
@@ -199,13 +182,6 @@ local PositionDropdown = Tabs.Farm:AddDropdown("FarmPosition", {
     Default = 1,
 })
 PositionDropdown:OnChanged(function(v) _G.FarmPosition = v end)
-
-local BringMobToggle = Tabs.Farm:AddToggle("BringMobToggle", { 
-    Title = "Bring Mobs (Magnet)", 
-    Default = false, 
-    Description = "Bypass: Teleports targeted mobs to your position." 
-})
-BringMobToggle:OnChanged(function(v) _G.BringMobs = v end)
 
 Tabs.Farm:AddButton({
     Title = "Refresh Targets",
@@ -639,37 +615,16 @@ task.spawn(function()
     end
 end)
 
--- Save Noclip & Bring Mobs (Stepped)
+-- Safe Noclip (only during Physics Fly)
 RunService.Stepped:Connect(function()
     local char = LocalPlayer.Character
     local hrp = char and char:FindFirstChild("HumanoidRootPart")
-    
-    -- Safe Noclip
     local flying = hrp and hrp:FindFirstChild("BypassPosition") ~= nil
+    
     if (_G.AutoFarm or _G.Teleporting) and flying and char then
         for _, p in ipairs(char:GetDescendants()) do
             if p:IsA("BasePart") and p.CanCollide then
                 p.CanCollide = false
-            end
-        end
-    end
-    
-    -- Bring Mobs Bypass
-    if _G.AutoFarm and _G.BringMobs and hrp and CurrentTarget then
-        local targetName = CurrentTarget.Name
-        local enemiesFolder = workspace:FindFirstChild("Enemies")
-        if enemiesFolder then
-            for _, e in ipairs(enemiesFolder:GetChildren()) do
-                if e.Name == targetName and e ~= CurrentTarget then
-                    local mobHum = e:FindFirstChildOfClass("Humanoid")
-                    local mobRoot = e:FindFirstChild("HumanoidRootPart")
-                    if mobHum and mobHum.Health > 0 and mobRoot then
-                        -- Set Network Ownership implicitly by teleporting them to our CFrame
-                        -- This bypass works if the server prioritizes client physics ownership
-                        mobRoot.CFrame = CurrentTarget:FindFirstChild("HumanoidRootPart") and CurrentTarget.HumanoidRootPart.CFrame or hrp.CFrame * CFrame.new(0, 0, -4)
-                        mobRoot.AssemblyLinearVelocity = Vector3.zero
-                    end
-                end
             end
         end
     end
