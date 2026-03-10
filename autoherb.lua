@@ -31,24 +31,25 @@ for _, v in ipairs(coreGui:GetChildren()) do
     preExistingGuis[v] = true
 end
 
-local WindUI = loadstring(game:HttpGet("https://raw.githubusercontent.com/Footagesus/WindUI/main/dist/main.lua"))()
+local MacLib = loadstring(game:HttpGet("https://github.com/biggaboy212/Maclib/releases/latest/download/maclib.lua"))()
 
-local Window = WindUI:CreateWindow({
-    Title = "Private Auto Farm | v6.0",
-    Icon = "swords",
-    Folder = "SoulCultivationHub",
-    OpenButton = {
-        Title = "Open Hub",
-        Enabled = true,
-        Scale = 0.5
-    }
+local Window = MacLib:Window({
+	Title = "Private Auto Farm",
+	Subtitle = "v6.0",
+	Size = UDim2.fromOffset(868, 650),
+	DragStyle = 1,
+	DisabledWindowControls = {},
+	ShowUserInfo = true,
+	Keybind = Enum.KeyCode.RightControl,
+	AcrylicBlur = true,
 })
 
+local TabGroup1 = Window:TabGroup()
 local Tabs = {
-    Farm     = Window:Tab({ Title = "Farm",     Icon = "swords",     Border = true }),
-    Teleport = Window:Tab({ Title = "Teleport", Icon = "map-pin",    Border = true }),
-    Settings = Window:Tab({ Title = "Settings", Icon = "settings",   Border = true }),
-    Misc     = Window:Tab({ Title = "Misc",     Icon = "box",        Border = true }),
+    Farm     = TabGroup1:Tab({ Name = "Farm",     Icon = "rbxassetid://11963332463" }),
+    Teleport = TabGroup1:Tab({ Name = "Teleport", Icon = "rbxassetid://11963332463" }),
+    Settings = TabGroup1:Tab({ Name = "Settings", Icon = "rbxassetid://11963332463" }),
+    Misc     = TabGroup1:Tab({ Name = "Misc",     Icon = "rbxassetid://11963332463" }),
 }
 
 -- ==========================================
@@ -144,73 +145,67 @@ end
 -- ==========================================
 -- [ 5. Farm Tab UI ]
 -- ==========================================
-pcall(function()
-    Tabs.Farm:AddParagraph({ Title = "Farm Controls", Content = "Pick a target, choose a position, then start." })
-    Tabs.Farm:Section({ Title = "🔥 การโจมตี (Combat)" })
-    
-    Tabs.Farm:Toggle({ 
-        Title = "เริ่มฟาร์มอัตโนมัติ (Start Auto Farm)", 
-        Callback = function(v) _G.AutoFarm = v end 
-    })
-end)
+local FarmSection = Tabs.Farm:Section({ Name = "🔥 การโจมตี (Combat)" })
 
-pcall(function()
-    Tabs.Farm:Toggle({ 
-        Title = "ตีบอสก่อนเป็นอันดับแรก (Priority Boss)", 
-        Desc = "ถ้ามีบอสเกิด สคริปต์จะพุ่งไปตีบอสก่อนมอนสเตอร์ปกติเสมอ", 
-        Callback = function(v) _G.BossPriority = v end 
-    })
+FarmSection:Toggle({ 
+    Name = "เริ่มฟาร์มอัตโนมัติ (Start Auto Farm)", 
+    Description = "เปิด/ปิด ระบบโจมตีอัตโนมัติ",
+    Default = false,
+    Callback = function(v) _G.AutoFarm = v end 
+})
 
-    Tabs.Farm:Dropdown({
-        Title = "เลือกบอสที่ต้องการฟาร์ม (Select Bosses)",
-        Values = BossList,
-        Multi = true,
-        Value = {},
-        Callback = function(v) _G.SelectedBosses = v end
-    })
-end)
+FarmSection:Toggle({ 
+    Name = "ตีบอสก่อนเป็นอันดับแรก (Priority Boss)", 
+    Description = "ถ้ามีบอสเกิด สคริปต์จะพุ่งไปตีบอสก่อนมอนสเตอร์ปกติเสมอ", 
+    Default = false,
+    Callback = function(v) _G.BossPriority = v end 
+})
+
+FarmSection:Dropdown({
+    Name = "เลือกบอสที่ต้องการฟาร์ม (Select Bosses)",
+    Options = BossList,
+    Multi = true,
+    Default = {},
+    Callback = function(v) _G.SelectedBosses = v end
+})
 
 -- Monster Dropdown
 local monsterValues = ScanMonsters()
 if #monsterValues == 0 then monsterValues = {"(ไม่มีมอนสเตอร์โผล่มา)"} end
 
-pcall(function()
-    Tabs.Farm:Dropdown({
-        Title = "เลือกมอนสเตอร์ (Select Monster)",
-        Values = monsterValues,
-        Value = monsterValues[1],
-        Callback = function(v)
-            if v ~= "(ไม่มีมอนสเตอร์โผล่มา)" then _G.SelectedMonster = v end
-        end
-    })
-    
-    Tabs.Farm:Dropdown({
-        Title = "จุดยืนตอนโจมตี (Stand Position)",
-        Desc = "ตำแหน่งที่คุณจะยืนเกาะมอนสเตอร์เวลาฟาร์ม (แนะนำ: ด้านหลัง)",
-        Values = {"Behind", "On Head", "Under"},
-        Value = "Behind",
-        Callback = function(v) _G.FarmPosition = v end
-    })
-end)
+local TargetMobDrop = FarmSection:Dropdown({
+    Name = "เลือกมอนสเตอร์ (Select Monster)",
+    Options = monsterValues,
+    Default = monsterValues[1],
+    Callback = function(v)
+        if v ~= "(ไม่มีมอนสเตอร์โผล่มา)" then _G.SelectedMonster = v end
+    end
+})
 
-pcall(function()
-    Tabs.Farm:Button({
-        Title = "อัปเดตรายชื่อมอนสเตอร์ (Refresh List)",
-        Desc = "กดเพื่อให้สคริปต์ค้นหามอนสเตอร์รอบๆ ตัวใหม่",
-        Callback = function()
-            local newList = ScanMonsters()
-            if #newList == 0 then newList = {"(ไม่มีมอนสเตอร์โผล่มา)"} end
-            if newList[1] ~= "(ไม่มีมอนสเตอร์โผล่มา)" then
-                _G.SelectedMonster = newList[1]
-            end
-            WindUI:Notify({
-                Title = "อัปเดตเรียบร้อย!",
-                Content = "พบมอนสเตอร์ " .. #newList .. " ตัว (โปรดเลือกในเมนูด้านบนใหม่)",
-                Duration = 3
-            })
+FarmSection:Dropdown({
+    Name = "จุดยืนตอนโจมตี (Stand Position)",
+    Description = "ตำแหน่งที่คุณจะยืนเกาะมอนสเตอร์เวลาฟาร์ม (แนะนำ: ด้านหลัง)",
+    Options = {"Behind", "On Head", "Under"},
+    Default = "Behind",
+    Callback = function(v) _G.FarmPosition = v end
+})
+
+FarmSection:Button({
+    Name = "อัปเดตรายชื่อมอนสเตอร์ (Refresh List)",
+    Callback = function()
+        local newList = ScanMonsters()
+        if #newList == 0 then newList = {"(ไม่มีมอนสเตอร์โผล่มา)"} end
+        if newList[1] ~= "(ไม่มีมอนสเตอร์โผล่มา)" then
+            _G.SelectedMonster = newList[1]
         end
-    })
-end)
+        pcall(function() TargetMobDrop:SetOptions(newList) end)
+        MacLib:Notify({
+            Title = "อัปเดตเรียบร้อย!",
+            Description = "พบมอนสเตอร์ " .. #newList .. " ตัว (โปรดเลือกในเมนูด้านบนใหม่)",
+            Time = 3
+        })
+    end
+})
 
 -- ==========================================
 -- [ 6. Teleport Tab ]
@@ -265,181 +260,184 @@ local function FindPosition(obj)
     return nil
 end
 
-pcall(function()
-    Tabs.Teleport:Section({ Title = "📍 จุดวาร์ป (Teleporting)" })
+local TeleportSection = Tabs.Teleport:Section({ Name = "📍 จุดวาร์ป (Teleporting)" })
 
-    TargetDropdown = Tabs.Teleport:Dropdown({
-        Title = "รายชื่อปลายทาง (Target)",
-        Values = initTargets,
-        Value = initTargets[1],
-        Callback = function(v) selectedTarget = v end,
-    })
+TargetDropdown = TeleportSection:Dropdown({
+    Name = "รายชื่อปลายทาง (Target)",
+    Options = initTargets,
+    Default = initTargets[1],
+    Callback = function(v) selectedTarget = v end,
+})
 
-    Tabs.Teleport:Dropdown({
-        Title = "หมวดหมู่การวาร์ป (Category)",
-        Desc = "เลือกประเภทของสิ่งที่คุณอยากวาร์ปไปหา",
-        Values = {"NPC", "Qi", "Training"},
-        Value = "NPC",
-        Callback = function(v)
-            selectedCategory = v
-            RefreshTargetList()
-        end,
-    })
-end)
+TeleportSection:Dropdown({
+    Name = "หมวดหมู่การวาร์ป (Category)",
+    Description = "เลือกประเภทของสิ่งที่คุณอยากวาร์ปไปหา",
+    Options = {"NPC", "Qi", "Training"},
+    Default = "NPC",
+    Callback = function(v)
+        selectedCategory = v
+        RefreshTargetList()
+    end,
+})
 
-pcall(function()
-    Tabs.Teleport:Button({
-        Title = "🚀 วาร์ปเลย (Start Teleport)",
-        Desc = "ระบบจะบินข้ามแมพไปหาเป้าหมายอย่างปลอดภัย",
-        Callback = function()
-            if selectedTarget == "(None Found)" or selectedTarget == "" then
-                WindUI:Notify({ Title = "ข้อผิดพลาด", Content = "โปรดเลือกเป้าหมายก่อนครับ!", Duration = 2 })
-                return
-            end
-
-            local targetObj = nil
-            if selectedCategory == "NPC" then
-                local folder = workspace:FindFirstChild("NPCs")
-                if folder then targetObj = folder:FindFirstChild(selectedTarget) end
-            elseif selectedCategory == "Qi" then
-                local tz = workspace:FindFirstChild("Training Zones")
-                local folder = tz and tz:FindFirstChild("Qi")
-                if folder then targetObj = folder:FindFirstChild(selectedTarget) end
-            elseif selectedCategory == "Training" then
-                local tz = workspace:FindFirstChild("Training Zones")
-                local folder = tz and tz:FindFirstChild("Training")
-                if folder then targetObj = folder:FindFirstChild(selectedTarget) end
-            end
-
-            if not targetObj then
-                WindUI:Notify({ Title = "Error", Content = "'" .. selectedTarget .. "' not found.", Duration = 3 })
-                return
-            end
-
-            local targetCF = FindPosition(targetObj)
-            if not targetCF then
-                WindUI:Notify({ Title = "Error", Content = "Can't get position.", Duration = 3 })
-                return
-            end
-
-            local destination = selectedCategory == "NPC"
-                and targetCF * CFrame.new(0, 0, 5)
-                or targetCF
-
-            local char = LocalPlayer.Character
-            local hrp = char and char:FindFirstChild("HumanoidRootPart")
-            if hrp then
-                if _G.AutoFarm then
-                    _G.AutoFarm = false
-                end
-                StopFlying()
-                
-                _G.Teleporting = true
-                WindUI:Notify({
-                    Title = "Teleporting",
-                    Content = "Flying to " .. selectedTarget .. "...",
-                    Duration = 3
-                })
-
-                task.spawn(function()
-                    while _G.Teleporting do
-                        local currentHrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-                        if not currentHrp then break end
-                        local dist = (currentHrp.Position - destination.Position).Magnitude
-                        if dist < 10 then
-                            StopFlying()
-                            _G.Teleporting = false
-                            WindUI:Notify({ Title = "Arrived", Content = "Reached " .. selectedTarget, Duration = 3 })
-                            break
-                        end
-                        FlyToTarget(destination)
-                        task.wait(0.1)
-                    end
-                end)
-            end
+TeleportSection:Button({
+    Name = "🚀 วาร์ปเลย (Start Teleport)",
+    Callback = function()
+        if selectedTarget == "(None Found)" or selectedTarget == "" then
+            MacLib:Notify({ Title = "ข้อผิดพลาด", Description = "โปรดเลือกเป้าหมายก่อนครับ!", Time = 2 })
+            return
         end
-    })
 
-    -- Stop Teleport
-    Tabs.Teleport:Button({
-        Title = "🛑 หยุดวาร์ป (Cancel)",
-        Desc = "เบรกกลางอากาศทันที",
-        Callback = function()
-            _G.Teleporting = false
+        local targetObj = nil
+        if selectedCategory == "NPC" then
+            local folder = workspace:FindFirstChild("NPCs")
+            if folder then targetObj = folder:FindFirstChild(selectedTarget) end
+        elseif selectedCategory == "Qi" then
+            local tz = workspace:FindFirstChild("Training Zones")
+            local folder = tz and tz:FindFirstChild("Qi")
+            if folder then targetObj = folder:FindFirstChild(selectedTarget) end
+        elseif selectedCategory == "Training" then
+            local tz = workspace:FindFirstChild("Training Zones")
+            local folder = tz and tz:FindFirstChild("Training")
+            if folder then targetObj = folder:FindFirstChild(selectedTarget) end
+        end
+
+        if not targetObj then
+            MacLib:Notify({ Title = "Error", Description = "'" .. selectedTarget .. "' not found.", Time = 3 })
+            return
+        end
+
+        local targetCF = FindPosition(targetObj)
+        if not targetCF then
+            MacLib:Notify({ Title = "Error", Description = "Can't get position.", Time = 3 })
+            return
+        end
+
+        local destination = selectedCategory == "NPC"
+            and targetCF * CFrame.new(0, 0, 5)
+            or targetCF
+
+        local char = LocalPlayer.Character
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        if hrp then
+            if _G.AutoFarm then
+                _G.AutoFarm = false
+            end
             StopFlying()
-            WindUI:Notify({ Title = "หยุดเรียบร้อย", Content = "ยกเลิกการวาร์ปแล้วครับ", Duration = 2 })
-        end
-    })
-
-    -- Refresh Targets
-    Tabs.Teleport:Button({
-        Title = "Refresh Targets",
-        Desc = "Re-scan targets for current category.",
-        Callback = function()
-            RefreshTargetList()
-            local targets = FetchTargetsByCategory(selectedCategory)
-            WindUI:Notify({
-                Title = "Refreshed",
-                Content = selectedCategory .. ": " .. #targets .. " target(s) found.",
-                Duration = 3
+            
+            _G.Teleporting = true
+            MacLib:Notify({
+                Title = "Teleporting",
+                Description = "Flying to " .. selectedTarget .. "...",
+                Time = 3
             })
+
+            task.spawn(function()
+                while _G.Teleporting do
+                    local currentHrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+                    if not currentHrp then break end
+                    local dist = (currentHrp.Position - destination.Position).Magnitude
+                    if dist < 10 then
+                        StopFlying()
+                        _G.Teleporting = false
+                        MacLib:Notify({ Title = "Arrived", Description = "Reached " .. selectedTarget, Time = 3 })
+                        break
+                    end
+                    FlyToTarget(destination)
+                    task.wait(0.1)
+                end
+            end)
         end
-    })
-end)
+    end
+})
+
+-- Stop Teleport
+TeleportSection:Button({
+    Name = "🛑 หยุดวาร์ป (Cancel)",
+    Callback = function()
+        _G.Teleporting = false
+        StopFlying()
+        MacLib:Notify({ Title = "หยุดเรียบร้อย", Description = "ยกเลิกการวาร์ปแล้วครับ", Time = 2 })
+    end
+})
+
+-- Refresh Targets
+TeleportSection:Button({
+    Name = "Refresh Targets",
+    Callback = function()
+        RefreshTargetList()
+        local targets = FetchTargetsByCategory(selectedCategory)
+        pcall(function() TargetDropdown:SetOptions(targets) end)
+        MacLib:Notify({
+            Title = "Refreshed",
+            Description = selectedCategory .. ": " .. #targets .. " target(s) found.",
+            Time = 3
+        })
+    end
+})
 
 -- ==========================================
 -- [ 7. Settings Tab ]
 -- ==========================================
-pcall(function()
-    Tabs.Settings:Section({ Title = "⏱️ ความเร็วและเกราะป้องกัน" })
+local SettingsSection = Tabs.Settings:Section({ Name = "⏱️ ความเร็วและเกราะป้องกัน" })
 
-    Tabs.Settings:Slider({
-        Title = "ระยะเข้าทำ (Attack Distance)",
-        Desc = "ถ้าตีบอสไม่โดนหรือบินห่างเกินไป ให้ปรับลดเลขลงมา (หน่วย: Studs)",
-        Step = 1,
-        Value = { Min = -5, Max = 15, Default = 2 },
-        Callback = function(v) _G.AttackDistance = v end
-    })
+SettingsSection:Slider({
+    Name = "ระยะเข้าทำ (Attack Distance)",
+    Description = "ถ้าตีบอสไม่โดนหรือบินห่างเกินไป ให้ปรับลดเลขลงมา (หน่วย: Studs)",
+    Default = 2,
+    Minimum = -5,
+    Maximum = 15,
+    DisplayMethod = "Value",
+    Callback = function(v) _G.AttackDistance = v end
+})
 
-    Tabs.Settings:Slider({
-        Title = "ความเร็วการบิน (Fly Speed)",
-        Step = 1,
-        Value = { Min = 50, Max = 500, Default = 150 },
-        Callback = function(v) _G.FlySpeed = v end
-    })
+SettingsSection:Slider({
+    Name = "ความเร็วการบิน (Fly Speed)",
+    Default = 150,
+    Minimum = 50,
+    Maximum = 500,
+    DisplayMethod = "Value",
+    Callback = function(v) _G.FlySpeed = v end
+})
 
-    Tabs.Settings:Slider({
-        Title = "ความเร็วการโจมตี (Attack Cooldown Delay)",
-        Desc = "ยิ่งเลขเยอะยิ่งตีช้า แต่จะเนียนตา ลดโอกาสโดนเกมแบน (หน่วย: มิลลิวินาที)",
-        Step = 1,
-        Value = { Min = 10, Max = 100, Default = 18 },
-        Callback = function(v) BASE_COOLDOWN = v / 1000 end
-    })
+SettingsSection:Slider({
+    Name = "ความเร็วการโจมตี (Attack Cooldown Delay)",
+    Description = "ยิ่งเลขเยอะยิ่งตีช้า แต่จะเนียนตา ลดโอกาสโดนเกมแบน (หน่วย: มิลลิวินาที)",
+    Default = 18,
+    Minimum = 10,
+    Maximum = 100,
+    DisplayMethod = "Value",
+    Callback = function(v) BASE_COOLDOWN = v / 1000 end
+})
 
-    Tabs.Settings:Slider({
-        Title = "เลือดฉุกเฉิน Safety HP (%)",
-        Desc = "ถ้าเลือดต่ำกว่าเปอร์เซ็นต์นี้ บอทจะหยุดฟาร์มทันทีเพื่อป้องกันตาย (ปรับเป็น 0 เพื่อปิด)",
-        Step = 1,
-        Value = { Min = 0, Max = 90, Default = 30 },
-        Callback = function(v) _G.MinHP = v end
-    })
-end)
+SettingsSection:Slider({
+    Name = "เลือดฉุกเฉิน Safety HP (%)",
+    Description = "ถ้าเลือดต่ำกว่าเปอร์เซ็นต์นี้ บอทจะหยุดฟาร์มทันทีเพื่อป้องกันตาย (ปรับเป็น 0 เพื่อปิด)",
+    Default = 30,
+    Minimum = 0,
+    Maximum = 90,
+    DisplayMethod = "Value",
+    Callback = function(v) _G.MinHP = v end
+})
 
 -- ==========================================
 -- [ 8. Misc Tab ]
 -- ==========================================
-pcall(function()
-    Tabs.Misc:Section({ Title = "🛡️ ฟังก์ชันป้องกันเซิฟเวอร์" })
+local MiscSection = Tabs.Misc:Section({ Name = "🛡️ ฟังก์ชันป้องกันเซิฟเวอร์" })
 
-    Tabs.Misc:Toggle({ Title = "ป้องกันการ AFK (Anti-AFK)", Default = true, Callback = function(v) _G.AntiAFK = v end })
+MiscSection:Toggle({ 
+    Name = "ป้องกันการ AFK (Anti-AFK)", 
+    Description = "คลิกเมาส์อัตโนมัติป้องกันเซิร์ฟเวอร์เตะคุณออก",
+    Default = true, 
+    Callback = function(v) _G.AntiAFK = v end 
+})
 
-    Tabs.Misc:Toggle({ 
-        Title = "ระบบเตะผู้เล่นอื่น (Anti-Player)", 
-        Desc = "เตะตัวเองออกจากเซิฟเวอร์ทันทีถ้ามีคนอื่นจอยเข้ามา (เหมาะสำหรับฟาร์มเซิฟ V แบบลับๆ)",
-        Default = false,
-        Callback = function(v) _G.AntiPlayer = v end
-    })
-end)
+MiscSection:Toggle({ 
+    Name = "ระบบเตะผู้เล่นอื่น (Anti-Player)", 
+    Description = "เตะตัวเองออกจากเซิฟเวอร์ทันทีถ้ามีคนอื่นจอยเข้ามา (เหมาะสำหรับฟาร์มเซิฟ V แบบลับๆ)",
+    Default = false,
+    Callback = function(v) _G.AntiPlayer = v end
+})
 
 -- ==========================================
 -- [ 9. Target Finder & State Machine (Premium) ]
@@ -524,7 +522,7 @@ task.spawn(function()
                 StopFlying()
                 _G.AutoFarm = false
                 FarmState = "IDLE"
-                WindUI:Notify({ Title = "Warning: Low HP!", Content = "Auto Farm stopped.", Duration = 5 })
+                MacLib:Notify({ Title = "Warning: Low HP!", Description = "Auto Farm stopped.", Time = 5 })
                 continue
             end
         end
@@ -538,7 +536,7 @@ task.spawn(function()
                 if AntiFallPart.Parent then AntiFallPart.Parent = nil end
                 if CurrentTarget ~= _G.LastNotifiedTarget then
                     _G.LastNotifiedTarget = CurrentTarget
-                    WindUI:Notify({ Title = "Target Locked", Content = "Now engaging: " .. CurrentTarget.Name, Duration = 2 })
+                    MacLib:Notify({ Title = "Target Locked", Description = "Now engaging: " .. CurrentTarget.Name, Time = 2 })
                 end
             else
                 FarmState = "SEARCHING"
@@ -640,8 +638,8 @@ end)
 -- ==========================================
 -- [ Finish Execution ]
 -- ==========================================
-WindUI:Notify({
+MacLib:Notify({
     Title = "Soul Cultivation Hub",
-    Content = "Loaded successfully! WindUI injected.",
-    Duration = 4
+    Description = "Loaded successfully! Maclib injected.",
+    Time = 4
 })
