@@ -432,6 +432,10 @@ local AntiPlayerToggle = Tabs.Misc:AddToggle("AntiPlayer", {
     Default = false 
 })
 
+local GhostBlacklist = {}
+local lastTargetHealth = -1
+local targetStuckTimer = 0
+
 -- ==========================================
 -- [ 9. Target Finder (S-Tier Distance Caching) ]
 -- ==========================================
@@ -440,26 +444,19 @@ local cachedTarget = nil
 local function IsValid(model)
     if not model or not model.Parent then return false end
     if model.Parent.Name ~= "Enemies" then return false end -- Strict parent check
+    if GhostBlacklist[model] then return false end -- Ghost Filter
     
     local hum = model:FindFirstChildOfClass("Humanoid")
     local hrp = model:FindFirstChild("HumanoidRootPart") or model.PrimaryPart
     
     if hum and hrp and hum.Health > 0 then
-        -- Advanced Death Check: Sometimes Health > 0 but the state is Dead
-        if hum:GetState() == Enum.HumanoidStateType.Dead then
-            return false
-        end
+        if hum:GetState() == Enum.HumanoidStateType.Dead then return false end
         
-        -- Advanced Dormant Check: Game hides the boss by making its body invisible before respawn
         local head = model:FindFirstChild("Head")
-        if head and head:IsA("BasePart") and head.Transparency >= 1 then
-            return false
-        end
+        if head and head:IsA("BasePart") and head.Transparency >= 1 then return false end
         
         local torso = model:FindFirstChild("UpperTorso") or model:FindFirstChild("Torso")
-        if torso and torso:IsA("BasePart") and torso.Transparency >= 1 then
-            return false
-        end
+        if torso and torso:IsA("BasePart") and torso.Transparency >= 1 then return false end
         
         return true
     end
@@ -467,17 +464,12 @@ local function IsValid(model)
 end
 
 local function GetOptimalTarget()
-    -- 1. Check if cache is still valid AND matches our current UI locks
     if cachedTarget and IsValid(cachedTarget) then
         local isBoss = _G.BossPriority and _G.SelectedBosses[cachedTarget.Name]
         local isSelectedMob = (cachedTarget.Name == _G.SelectedMonster)
-        
-        if isBoss or isSelectedMob then
-            return cachedTarget
-        end
+        if isBoss or isSelectedMob then return cachedTarget end
     end
     
-    -- Cache invalid, scan for new target
     cachedTarget = nil
     local enemiesFolder = workspace:FindFirstChild("Enemies")
     if not enemiesFolder then return nil end
@@ -488,27 +480,23 @@ local function GetOptimalTarget()
     
     local myPos = hrp.Position
     local bestTarget = nil
-    local bestScore = math.huge -- Lower is better (distance)
+    local bestScore = math.huge
     
-    -- 2. Scan all enemies in ONE loop
     for _, e in ipairs(enemiesFolder:GetChildren()) do
         if IsValid(e) then
             local targetPos = (e:FindFirstChild("HumanoidRootPart") or e.PrimaryPart).Position
             local dist = (myPos - targetPos).Magnitude
             
-            -- Score logic
             local isBoss = _G.BossPriority and _G.SelectedBosses[e.Name]
             local isSelectedMob = (e.Name == _G.SelectedMonster)
             
             if isBoss then
-                -- Bosses have absolute priority, negative distance score
                 local score = dist - 999999
                 if score < bestScore then
                     bestScore = score
                     bestTarget = e
                 end
             elseif isSelectedMob then
-                -- Regular mobs ranked purely by distance
                 if dist < bestScore then
                     bestScore = dist
                     bestTarget = e
@@ -516,9 +504,6 @@ local function GetOptimalTarget()
             end
         end
     end
-    
-    -- 3. Removed Ultimate Fallback: The user wants strict locks. 
-    -- If no Boss or SelectedMonster is alive right now, it should return nil and wait for spawns.
     
     cachedTarget = bestTarget
     return cachedTarget
@@ -536,7 +521,7 @@ local stuckTimer = 0
 local lastPosition = Vector3.zero
 
 task.spawn(function()
-    while task.wait(0.05) do -- Fast 20 TPS loop, lighter than Stepped but fast enough for combat
+    while task.wait(0.05) do
         if not _G.AutoFarm then
             if currentState ~= STATE_IDLE then
                 StopPhysicsFly()
@@ -545,11 +530,9 @@ task.spawn(function()
             continue
         end
 
-        -- HP Safety Check
         local char = LocalPlayer.Character
         local hum = char and char:FindFirstChildOfClass("Humanoid")
         local hrp = char and char:FindFirstChild("HumanoidRootPart")
-        
         if not char or not hum or not hrp then continue end
         
         if _G.MinHP > 0 then
@@ -558,16 +541,11 @@ task.spawn(function()
                 StopPhysicsFly()
                 _G.AutoFarm = false
                 pcall(function() FarmToggle:SetValue(false) end)
-                Fluent:Notify({
-                    Title = "Warning: Low HP!",
-                    Content = "HP dropped below " .. _G.MinHP .. "% — Auto Farm stopped.",
-                    Duration = 5
-                })
+                Fluent:Notify({ Title = "Warning: Low HP!", Content = "Auto Farm stopped.", Duration = 5 })
                 continue
             end
         end
 
-        -- Target Acquisition
         local target = GetOptimalTarget()
         
         if not target then
@@ -579,8 +557,9 @@ task.spawn(function()
         end
 
         local targetRoot = target:FindFirstChild("HumanoidRootPart") or target.PrimaryPart
-        if not targetRoot then
-            cachedTarget = nil -- Force retarget if broke
+        local targetHum = target:FindFirstChildOfClass("Humanoid")
+        if not targetRoot or not targetHum then
+            cachedTarget = nil
             continue
         end
 
@@ -616,18 +595,29 @@ task.spawn(function()
             
         else
             -- STATE: ATTACKING
-            if currentState == STATE_MOVING then
-                StopPhysicsFly() -- Clean stop
-            end
+            if currentState == STATE_MOVING then StopPhysicsFly() end
             currentState = STATE_ATTACKING
             
-            -- Absolute CFrame Lock
             hrp.CFrame = standPos
             hrp.AssemblyLinearVelocity = Vector3.zero
             hrp.AssemblyAngularVelocity = Vector3.zero
             
             SafeAttack()
-            stuckTimer = 0 -- Reset anti-stuck in combat
+            stuckTimer = 0
+            
+            -- S-Tier Ghost Filter: If HP doesn't drop for 3 seconds while attacking, it's a fake/immortal boss
+            if targetHum.Health == lastTargetHealth then
+                targetStuckTimer = targetStuckTimer + 0.05
+                if targetStuckTimer > 3 then
+                    GhostBlacklist[target] = true
+                    cachedTarget = nil
+                    targetStuckTimer = 0
+                    lastTargetHealth = -1
+                end
+            else
+                targetStuckTimer = 0
+                lastTargetHealth = targetHum.Health
+            end
         end
     end
 end)
