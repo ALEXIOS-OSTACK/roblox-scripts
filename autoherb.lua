@@ -251,14 +251,14 @@ task.spawn(function()
                 continue
             end
             
-            local rBox = GetTargetBoundingBoxRadius(CurrentTarget)
+            local rBox = GetTargetBoundingBoxRadius(CurrentTarget) * 0.6
             local offset
             if getgenv().BossHopConfig.FarmPosition == "On Head" then
-                offset = CFrame.new(0, rBox + 4, 0)
+                offset = CFrame.new(0, rBox + 2, 0)
             elseif getgenv().BossHopConfig.FarmPosition == "Under" then
-                offset = CFrame.new(0, -(rBox + 4), 0)
+                offset = CFrame.new(0, -(rBox + 2), 0)
             else
-                offset = CFrame.new(0, 0, rBox + 4)
+                offset = CFrame.new(0, 0, rBox + 2)
             end
             
             local standCFrame = targetRoot.CFrame * offset
