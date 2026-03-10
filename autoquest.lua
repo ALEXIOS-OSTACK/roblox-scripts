@@ -76,11 +76,10 @@ local JITTER_RANGE  = 0.08
 local function StopPhysicsFly()
     local hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
     if hrp then
-        local pos = hrp:FindFirstChild("BypassPosition")
-        local ori = hrp:FindFirstChild("BypassOrientation")
-        if pos then pos.Enabled = false end
-        if ori then ori.Enabled = false end
-        
+        for _, name in ipairs({"BypassPosition", "BypassOrientation", "BypassAttachment"}) do
+            local p = hrp:FindFirstChild(name)
+            if p then p:Destroy() end
+        end
         hrp.AssemblyLinearVelocity  = Vector3.zero
         hrp.AssemblyAngularVelocity = Vector3.zero
     end
@@ -97,13 +96,11 @@ local function PhysicsFlyTo(targetCFrame)
     pos.Name = "BypassPosition"; pos.Attachment0 = att
     pos.Mode = Enum.PositionAlignmentMode.OneAttachment
     pos.MaxForce = math.huge; pos.MaxVelocity = _G.FlySpeed; pos.Responsiveness = 200
-    pos.Enabled = true
 
     local ori = hrp:FindFirstChild("BypassOrientation") or Instance.new("AlignOrientation", hrp)
     ori.Name = "BypassOrientation"; ori.Attachment0 = att
     ori.Mode = Enum.OrientationAlignmentMode.OneAttachment
     ori.MaxTorque = math.huge; ori.Responsiveness = 200
-    ori.Enabled = true
 
     pos.Position = targetCFrame.Position
     ori.CFrame   = targetCFrame
@@ -519,7 +516,7 @@ task.spawn(function()
                     PhysicsFlyTo(standPos)
                 else
                     -- อยู่ในระยะตีแล้ว: บังคับประกบติดเป้ามอนสเตอร์เสมอ
-                    if hrp:FindFirstChild("BypassPosition") and hrp.BypassPosition.Enabled then
+                    if hrp:FindFirstChild("BypassPosition") then
                         StopPhysicsFly()
                     end
                     hrp.CFrame = standPos
@@ -560,8 +557,7 @@ end)
 RunService.Stepped:Connect(function()
     local char = LocalPlayer.Character
     local hrp = char and char:FindFirstChild("HumanoidRootPart")
-    local pos = hrp and hrp:FindFirstChild("BypassPosition")
-    local flying = pos and pos.Enabled == true
+    local flying = hrp and hrp:FindFirstChild("BypassPosition") ~= nil
     
     if (_G.AutoFarm or _G.Teleporting) and flying and char then
         for _, p in ipairs(char:GetDescendants()) do
