@@ -452,9 +452,14 @@ local function IsValid(model)
 end
 
 local function GetOptimalTarget()
-    -- 1. Check if cache is still valid
+    -- 1. Check if cache is still valid AND matches our current UI locks
     if cachedTarget and IsValid(cachedTarget) then
-        return cachedTarget
+        local isBoss = _G.BossPriority and _G.SelectedBosses[cachedTarget.Name]
+        local isSelectedMob = (cachedTarget.Name == _G.SelectedMonster)
+        
+        if isBoss or isSelectedMob then
+            return cachedTarget
+        end
     end
     
     -- Cache invalid, scan for new target
@@ -497,19 +502,8 @@ local function GetOptimalTarget()
         end
     end
     
-    -- 3. Ultimate Fallback: If strict names failed but we need ANY target
-    if not bestTarget and _G.SelectedMonster ~= "" then
-        for _, e in ipairs(enemiesFolder:GetChildren()) do
-            if IsValid(e) then
-                local targetPos = (e:FindFirstChild("HumanoidRootPart") or e.PrimaryPart).Position
-                local dist = (myPos - targetPos).Magnitude
-                if dist < bestScore then
-                    bestScore = dist
-                    bestTarget = e
-                end
-            end
-        end
-    end
+    -- 3. Removed Ultimate Fallback: The user wants strict locks. 
+    -- If no Boss or SelectedMonster is alive right now, it should return nil and wait for spawns.
     
     cachedTarget = bestTarget
     return cachedTarget
