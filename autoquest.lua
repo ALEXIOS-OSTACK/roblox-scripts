@@ -475,6 +475,9 @@ end
 -- ==========================================
 -- [ 10. Main Farm Loop (Basic Framework) ]
 -- ==========================================
+local targetStuckTimer = 0
+local lastTargetHealth = -1
+
 task.spawn(function()
     while task.wait() do
         if not _G.AutoFarm then
@@ -503,6 +506,8 @@ task.spawn(function()
         if target then
             if target ~= _G.LastNotifiedTarget then
                 _G.LastNotifiedTarget = target
+                targetStuckTimer = 0
+                lastTargetHealth = -1
                 Fluent:Notify({ Title = "Target Locked", Content = "Now attacking: " .. target.Name, Duration = 2 })
             end
             
@@ -524,6 +529,24 @@ task.spawn(function()
                 
                 -- Always attack blindly
                 SafeAttack()
+                
+                -- Boss Corpse Annihilator
+                -- If a Boss corpse is immortal, delete it from the universe.
+                if _G.BossPriority and _G.SelectedBosses[target.Name] then
+                    local currentHP = hum.Health
+                    if lastTargetHealth == currentHP then
+                        targetStuckTimer = targetStuckTimer + 0.05
+                        if targetStuckTimer > 5 then
+                            pcall(function() target:Destroy() end)
+                            _G.LastNotifiedTarget = nil
+                            targetStuckTimer = 0
+                            lastTargetHealth = -1
+                        end
+                    else
+                        targetStuckTimer = 0
+                    end
+                    lastTargetHealth = currentHP
+                end
                 
                 -- Hard lock velocity if close to prevent spinning
                 local distToTarget = (hrp.Position - targetRoot.Position).Magnitude
