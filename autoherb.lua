@@ -132,10 +132,26 @@ local function SafeAttack()
                 char.Humanoid:EquipTool(tool)
             end
             tool:Activate()
-            
-            -- Keep the remote firing as backup just in case
-            if tool:IsA("Tool") and ReplicatedStorage:FindFirstChild("RemoteEvents") then
-                ReplicatedStorage.RemoteEvents.Attack:FireServer("Light", { ["RootPart"] = hrp })
+            -- If BringMobs is on, we do AoE (hit everything near us)
+            if _G.BringMobs and ReplicatedStorage:FindFirstChild("RemoteEvents") then
+                local enemiesFolder = workspace:FindFirstChild("Enemies")
+                if enemiesFolder then
+                    for _, e in ipairs(enemiesFolder:GetChildren()) do
+                        local mobRoot = e:FindFirstChild("HumanoidRootPart")
+                        local mobHum = e:FindFirstChildOfClass("Humanoid")
+                        if mobRoot and mobHum and mobHum.Health > 0 then
+                            local dist = (hrp.Position - mobRoot.Position).Magnitude
+                            if dist < 25 then -- AoE Range
+                                ReplicatedStorage.RemoteEvents.Attack:FireServer("Light", { ["RootPart"] = mobRoot })
+                            end
+                        end
+                    end
+                end
+            else
+                -- Normal single target attack
+                if tool:IsA("Tool") and ReplicatedStorage:FindFirstChild("RemoteEvents") then
+                    ReplicatedStorage.RemoteEvents.Attack:FireServer("Light", { ["RootPart"] = hrp })
+                end
             end
         end
     end)
