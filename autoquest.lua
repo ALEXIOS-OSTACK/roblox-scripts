@@ -444,7 +444,7 @@ local cachedTarget = nil
 local function IsValid(model)
     if not model or not model.Parent then return false end
     if model.Parent.Name ~= "Enemies" then return false end -- Strict parent check
-    if GhostBlacklist[model] then return false end -- Ghost Filter
+    if GhostBlacklist[model] and tick() < GhostBlacklist[model] then return false end -- Ghost Filter Timeout
     
     local hum = model:FindFirstChildOfClass("Humanoid")
     local hrp = model:FindFirstChild("HumanoidRootPart") or model.PrimaryPart
@@ -467,7 +467,29 @@ local function GetOptimalTarget()
     if cachedTarget and IsValid(cachedTarget) then
         local isBoss = _G.BossPriority and _G.SelectedBosses[cachedTarget.Name]
         local isSelectedMob = (cachedTarget.Name == _G.SelectedMonster)
-        if isBoss or isSelectedMob then return cachedTarget end
+        
+        -- If we are holding a regular mob, but Bosses have priority, 
+        -- we must check if a Boss respawned while we were holding this mob.
+        if isSelectedMob and not isBoss and _G.BossPriority then
+            local enemyFolder = workspace:FindFirstChild("Enemies")
+            local bossAlive = false
+            if enemyFolder then
+                for _, e in ipairs(enemyFolder:GetChildren()) do
+                    if _G.SelectedBosses[e.Name] and IsValid(e) then
+                        bossAlive = true
+                        break
+                    end
+                end
+            end
+            if bossAlive then
+                -- A boss respawned! Discard the regular mob cache.
+                cachedTarget = nil 
+            else
+                return cachedTarget
+            end
+        elseif isBoss or isSelectedMob then
+            return cachedTarget 
+        end
     end
     
     cachedTarget = nil
@@ -519,6 +541,7 @@ local STATE_ATTACKING = 2
 local currentState = STATE_IDLE
 local stuckTimer = 0
 local lastPosition = Vector3.zero
+local currentTrackedTarget = nil
 
 task.spawn(function()
     while task.wait(0.05) do
@@ -548,6 +571,13 @@ task.spawn(function()
 
         local target = GetOptimalTarget()
         
+        if currentTrackedTarget ~= target then
+            currentTrackedTarget = target
+            stuckTimer = 0
+            targetStuckTimer = 0
+            lastTargetHealth = -1
+        end
+        
         if not target then
             if currentState ~= STATE_IDLE then
                 StopPhysicsFly()
@@ -563,20 +593,40 @@ task.spawn(function()
             continue
         end
 
-        -- Calculate stand position
+        -- Dynamic Stand Position Calculation (Auto-adjusts for giant bosses)
+        local targetRadius = 2
+        local targetHeight = 4
+        
+        if target:IsA("Model") then
+            local _, size = target:GetBoundingBox()
+            targetRadius = math.max(size.X, size.Z) / 2
+            targetHeight = size.Y / 2
+        elseif targetRoot:IsA("BasePart") then
+            targetRadius = math.max(targetRoot.Size.X, targetRoot.Size.Z) / 2
+            targetHeight = targetRoot.Size.Y / 2
+        end
+        
+        -- Cap distances for regular mobs so we don't stand too far away due to weapon hitboxes
+        local isBoss = _G.BossPriority and _G.SelectedBosses[target.Name]
+        if not isBoss then
+            targetRadius = 0 -- Stand as close as physically possible to ensure melee weapons hit
+            targetHeight = 2 -- Stand slightly above center if 'On Head'
+        end
+        
         local offset
         if _G.FarmPosition == "On Head" then
-            offset = CFrame.new(0, 4, 0)
+            offset = CFrame.new(0, targetHeight + 2, 0)
         elseif _G.FarmPosition == "Under" then
-            offset = CFrame.new(0, -4, 0)
+            offset = CFrame.new(0, -targetHeight - 2, 0)
         else
-            offset = CFrame.new(0, 0, 3) 
+            offset = CFrame.new(0, 0, targetRadius + 2) 
         end
+        
         local standPos = targetRoot.CFrame * offset
-        local distToTarget = (hrp.Position - targetRoot.Position).Magnitude
+        local distToTarget = (hrp.Position - standPos.Position).Magnitude
 
         -- State Machine Evaluation
-        if distToTarget > 12 then
+        if distToTarget > 4 then
             -- STATE: MOVING
             currentState = STATE_MOVING
             PhysicsFlyTo(standPos)
@@ -585,6 +635,8 @@ task.spawn(function()
             if (hrp.Position - lastPosition).Magnitude < 2 then
                 stuckTimer = stuckTimer + 0.05
                 if stuckTimer > 5 then -- Stuck for 5 seconds
+                    pcall(function() Fluent:Notify({ Title = "Target Skipped", Content = "Unreachable. Blacklisting for 60s.", Duration = 3 }) end)
+                    GhostBlacklist[target] = tick() + 60 -- Blacklist unreachable target for 60s
                     cachedTarget = nil -- Force pick a new target
                     stuckTimer = 0
                 end
@@ -605,19 +657,21 @@ task.spawn(function()
             SafeAttack()
             stuckTimer = 0
             
-            -- S-Tier Ghost Filter: If HP doesn't drop for 3 seconds while attacking, it's a fake/immortal boss
-            if targetHum.Health == lastTargetHealth then
+            -- Combat Progress Filter: Check if we are actually dealing damage
+            local currentHP = targetHum.Health
+            if lastTargetHealth == -1 or currentHP >= lastTargetHealth then
                 targetStuckTimer = targetStuckTimer + 0.05
-                if targetStuckTimer > 3 then
-                    GhostBlacklist[target] = true
+                if targetStuckTimer > 5 then -- No damage progress for 5s means it's invincible/ghost
+                    pcall(function() Fluent:Notify({ Title = "Target Skipped", Content = "Invincible Model. Blacklisting for 60s.", Duration = 3 }) end)
+                    GhostBlacklist[target] = tick() + 60 -- Blacklist invincible target for 60s
                     cachedTarget = nil
                     targetStuckTimer = 0
                     lastTargetHealth = -1
                 end
             else
                 targetStuckTimer = 0
-                lastTargetHealth = targetHum.Health
             end
+            lastTargetHealth = currentHP
         end
     end
 end)
