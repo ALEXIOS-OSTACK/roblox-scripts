@@ -502,8 +502,6 @@ local STATE_ATTACKING = 2
 local currentState = STATE_IDLE
 local stuckTimer = 0
 local lastPosition = Vector3.zero
-local lastDistToTarget = 999999
-local timeSinceDistChanged = 0
 
 task.spawn(function()
     while task.wait(0.05) do
@@ -537,8 +535,6 @@ task.spawn(function()
             currentTrackedTarget = target
             targetStuckTimer = 0
             lastTargetHealth = -1
-            lastDistToTarget = 999999
-            timeSinceDistChanged = 0
         end
         
         if not target then
@@ -571,21 +567,6 @@ task.spawn(function()
             currentState = STATE_MOVING
             PhysicsFlyTo(standPos)
             
-            -- S-Tier Anti-Stuck (Progress Tracker)
-            -- If we are flying, the distance should constantly decrease.
-            if math.abs(distToTarget - lastDistToTarget) < 2 then
-                timeSinceDistChanged = timeSinceDistChanged + 0.05
-                if timeSinceDistChanged > 4 then -- Stuck for 4 seconds
-                    pcall(function() Fluent:Notify({ Title = "Target Skipped", Content = "Unreachable Target! Blacklisting 60s.", Duration = 3 }) end)
-                    GhostBlacklist[target] = tick() + 60
-                    timeSinceDistChanged = 0
-                    currentTrackedTarget = nil
-                end
-            else
-                timeSinceDistChanged = 0
-                lastDistToTarget = distToTarget
-            end
-            
         else
             -- STATE: ATTACKING
             if currentState == STATE_MOVING then StopPhysicsFly() end
@@ -596,7 +577,6 @@ task.spawn(function()
             hrp.AssemblyAngularVelocity = Vector3.zero
             
             SafeAttack()
-            timeSinceDistChanged = 0
             
             -- Boss Corpse Filter: Only blacklist BOSSES if they take 0 damage for 5 seconds.
             if _G.BossPriority and _G.SelectedBosses[target.Name] then
