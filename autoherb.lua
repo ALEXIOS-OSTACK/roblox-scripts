@@ -16,6 +16,9 @@ _G.FarmPosition  = "Behind"
 _G.FlySpeed      = 150
 _G.MinHP         = 30
 _G.Teleporting   = false
+_G.AntiAFK       = true
+_G.AntiPlayer    = false
+_G.AttackDistance = 2
 
 local BossList = {"Zanshi Bing Ren", "Zanshi Huo Ren", "Mount Hua Leader"}
 
@@ -28,32 +31,30 @@ for _, v in ipairs(coreGui:GetChildren()) do
     preExistingGuis[v] = true
 end
 
-local Fluent         = loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
-local SaveManager    = loadstring(game:HttpGet("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Addons/SaveManager.lua"))()
-local InterfaceManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Addons/InterfaceManager.lua"))()
+local WindUI = loadstring(game:HttpGet("https://raw.githubusercontent.com/Footagesus/WindUI/main/dist/main.lua"))()
 
-local Window = Fluent:CreateWindow({
-    Title = "Private",
-    SubTitle = "Auto Farm | v6.0",
-    TabWidth = 160,
-    Size = UDim2.fromOffset(580, 460),
-    Acrylic = false,
-    Theme = "Dark",
-    MinimizeKey = Enum.KeyCode.LeftControl
+local Window = WindUI:CreateWindow({
+    Title = "Private Auto Farm | v6.0",
+    Icon = "swords",
+    Folder = "SoulCultivationHub",
+    OpenButton = {
+        Title = "Open Hub",
+        Enabled = true,
+        Scale = 0.5
+    }
 })
 
 local Tabs = {
-    Farm     = Window:AddTab({ Title = "Farm",     Icon = "swords" }),
-    Teleport = Window:AddTab({ Title = "Teleport", Icon = "map-pin" }),
-    Misc     = Window:AddTab({ Title = "Misc",     Icon = "box" }),
-    Settings = Window:AddTab({ Title = "Config",   Icon = "settings" }),
-    Config   = Window:AddTab({ Title = "Setting",  Icon = "save" }),
+    Farm     = Window:Tab({ Title = "Farm",     Icon = "swords" }),
+    Teleport = Window:Tab({ Title = "Teleport", Icon = "map-pin" }),
+    Settings = Window:Tab({ Title = "Settings", Icon = "settings" }),
+    Misc     = Window:Tab({ Title = "Misc",     Icon = "box" }),
 }
 
 -- ==========================================
 -- [ 3. Entity Scanner ]
 -- ==========================================
-local function GetMonsterList()
+local function ScanMonsters()
     local names = {}
     local e = workspace:FindFirstChild("Enemies")
     if e then
@@ -73,7 +74,7 @@ end
 local BASE_COOLDOWN = 0.18
 local JITTER_RANGE  = 0.08
 
-local function StopPhysicsFly()
+local function StopFlying()
     local hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
     if hrp then
         for _, name in ipairs({"BypassPosition", "BypassOrientation", "BypassAttachment"}) do
@@ -85,7 +86,7 @@ local function StopPhysicsFly()
     end
 end
 
-local function PhysicsFlyTo(targetCFrame)
+local function FlyToTarget(targetCFrame)
     local hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
     if not hrp then return end
 
@@ -114,7 +115,7 @@ local function PhysicsFlyTo(targetCFrame)
 end
 
 local lastAttackTime = 0
-local function SafeAttack()
+local function AutoHit()
     local now = tick()
     local cooldown = BASE_COOLDOWN + math.random() * JITTER_RANGE
     if now - lastAttackTime < cooldown then return end
@@ -145,57 +146,63 @@ end
 -- ==========================================
 Tabs.Farm:AddParagraph({ Title = "Farm Controls", Content = "Pick a target, choose a position, then start." })
 
-local FarmToggle = Tabs.Farm:AddToggle("FarmToggle", { Title = "Auto Farm", Default = false })
-FarmToggle:OnChanged(function(v) _G.AutoFarm = v end)
+Tabs.Farm:Section({ Title = "🔥 การโจมตี (Combat)" })
 
-local PriorityToggle = Tabs.Farm:AddToggle("PriorityToggle", { Title = "Boss Priority", Default = false, Description = "Kill bosses before regular mobs." })
-PriorityToggle:OnChanged(function(v) _G.BossPriority = v end)
+Tabs.Farm:Toggle({ 
+    Title = "เริ่มฟาร์มอัตโนมัติ (Start Auto Farm)", 
+    Callback = function(v) _G.AutoFarm = v end 
+})
 
-local BossDropdown = Tabs.Farm:AddDropdown("BossDropdown", {
-    Title = "Target Boss",
+Tabs.Farm:Toggle({ 
+    Title = "ตีบอสก่อนเป็นอันดับแรก (Priority Boss)", 
+    Desc = "ถ้ามีบอสเกิด สคริปต์จะพุ่งไปตีบอสก่อนมอนสเตอร์ปกติเสมอ", 
+    Callback = function(v) _G.BossPriority = v end 
+})
+
+Tabs.Farm:Dropdown({
+    Title = "เลือกบอสที่ต้องการฟาร์ม (Select Bosses)",
     Values = BossList,
     Multi = true,
-    Default = {},
+    Value = {},
+    Callback = function(v) _G.SelectedBosses = v end
 })
-BossDropdown:OnChanged(function(v) _G.SelectedBosses = v end)
 
 -- Monster Dropdown
 local monsterValues = GetMonsterList()
 if #monsterValues == 0 then monsterValues = {"(No Monsters Found)"} end
 
-local MonsterDropdown = Tabs.Farm:AddDropdown("MonsterDropdown", {
-    Title = "Target Monster",
+Tabs.Farm:Dropdown({
+    Title = "เลือกมอนสเตอร์ (Select Monster)",
     Values = monsterValues,
-    Default = 1,
+    Value = monsterValues[1],
+    Callback = function(v)
+        if v ~= "(No Monsters Found)" then _G.SelectedMonster = v end
+    end
 })
-MonsterDropdown:OnChanged(function(v)
-    if v ~= "(No Monsters Found)" then _G.SelectedMonster = v end
-end)
 if monsterValues[1] ~= "(No Monsters Found)" then
     _G.SelectedMonster = monsterValues[1]
 end
 
-local PositionDropdown = Tabs.Farm:AddDropdown("FarmPosition", {
-    Title = "Stand Position",
-    Description = "Where to stand while attacking.",
+Tabs.Farm:Dropdown({
+    Title = "จุดยืนตอนโจมตี (Stand Position)",
+    Desc = "ตำแหน่งที่คุณจะยืนเกาะมอนสเตอร์เวลาฟาร์ม (แนะนำ: ด้านหลัง)",
     Values = {"Behind", "On Head", "Under"},
-    Default = 1,
+    Value = "Behind",
+    Callback = function(v) _G.FarmPosition = v end
 })
-PositionDropdown:OnChanged(function(v) _G.FarmPosition = v end)
 
-Tabs.Farm:AddButton({
-    Title = "Refresh Targets",
-    Description = "Re-scan all enemies in the area.",
+Tabs.Farm:Button({
+    Title = "อัปเดตรายชื่อมอนสเตอร์ (Refresh List)",
+    Desc = "กดเพื่อให้สคริปต์ค้นหามอนสเตอร์รอบๆ ตัวใหม่",
     Callback = function()
-        local newList = GetMonsterList()
-        if #newList == 0 then newList = {"(No Monsters Found)"} end
-        pcall(function() MonsterDropdown:SetValue(newList[1]) end)
-        if newList[1] ~= "(No Monsters Found)" then
+        local newList = ScanMonsters()
+        if #newList == 0 then newList = {"(ไม่มีมอนสเตอร์โผล่มา)"} end
+        if newList[1] ~= "(ไม่มีมอนสเตอร์โผล่มา)" then
             _G.SelectedMonster = newList[1]
         end
-        Fluent:Notify({
-            Title = "Refreshed",
-            Content = "Found " .. #newList .. " monster type(s).\nTarget: " .. _G.SelectedMonster,
+        WindUI:Notify({
+            Title = "อัปเดตเรียบร้อย!",
+            Content = "พบมอนสเตอร์ " .. #newList .. " ตัว (โปรดเลือกในเมนูด้านบนใหม่)",
             Duration = 3
         })
     end
@@ -205,7 +212,7 @@ Tabs.Farm:AddButton({
 -- [ 6. Teleport Tab ]
 -- ==========================================
 -- Scan NPCs
-local function GetNPCList()
+local function ScanNPCs()
     local names = {}
     local npcFolder = workspace:FindFirstChild("NPCs")
     if npcFolder then
@@ -222,7 +229,7 @@ local function GetNPCList()
 end
 
 -- Scan Training Zones
-local function GetZoneList(subFolder)
+local function ScanZones(subFolder)
     local names = {}
     local tz = workspace:FindFirstChild("Training Zones")
     if tz then
@@ -240,7 +247,7 @@ local function GetZoneList(subFolder)
 end
 
 -- Get position of object (supports Model and BasePart)
-local function GetPosition(obj)
+local function FindPosition(obj)
     if obj:IsA("Model") then
         local hrp = obj:FindFirstChild("HumanoidRootPart") or obj:FindFirstChild("Head")
         if hrp then return hrp.CFrame end
@@ -254,63 +261,54 @@ local function GetPosition(obj)
     return nil
 end
 
-Tabs.Teleport:AddParagraph({ Title = "Teleport", Content = "Select category, pick target, then teleport." })
+Tabs.Teleport:Section({ Title = "📍 จุดวาร์ป (Teleporting)" })
 
--- Category Dropdown
 local selectedCategory = "NPC"
 local selectedTarget = ""
 
-local function GetTargetsForCategory(category)
-    if category == "NPC" then
-        return GetNPCList()
-    elseif category == "Qi" then
-        return GetZoneList("Qi")
-    elseif category == "Training" then
-        return GetZoneList("Training")
-    end
+local function FetchTargetsByCategory(category)
+    if category == "NPC" then return ScanNPCs()
+    elseif category == "Qi" then return ScanZones("Qi")
+    elseif category == "Training" then return ScanZones("Training") end
     return {}
 end
 
-local initTargets = GetNPCList()
+local initTargets = ScanNPCs()
 if #initTargets == 0 then initTargets = {"(None Found)"} end
 selectedTarget = initTargets[1]
 
-local TargetDropdown = Tabs.Teleport:AddDropdown("TargetDropdown", {
-    Title = "Target",
+local TargetDropdown
+TargetDropdown = Tabs.Teleport:Dropdown({
+    Title = "รายชื่อปลายทาง (Target)",
     Values = initTargets,
-    Default = 1,
+    Value = initTargets[1],
+    Callback = function(v) selectedTarget = v end,
 })
-TargetDropdown:OnChanged(function(v) selectedTarget = v end)
 
--- Update target list when category changes
-local function UpdateTargets()
-    local targets = GetTargetsForCategory(selectedCategory)
+local function RefreshTargetList()
+    local targets = FetchTargetsByCategory(selectedCategory)
     if #targets == 0 then targets = {"(None Found)"} end
-    pcall(function()
-        TargetDropdown:SetValues(targets)
-        TargetDropdown:SetValue(targets[1])
-    end)
+    TargetDropdown:SetValues(targets)
     selectedTarget = targets[1]
 end
 
-local CategoryDropdown = Tabs.Teleport:AddDropdown("CategoryDropdown", {
-    Title = "Category",
-    Description = "Select teleport category.",
+Tabs.Teleport:Dropdown({
+    Title = "หมวดหมู่การวาร์ป (Category)",
+    Desc = "เลือกประเภทของสิ่งที่คุณอยากวาร์ปไปหา",
     Values = {"NPC", "Qi", "Training"},
-    Default = 1,
+    Value = "NPC",
+    Callback = function(v)
+        selectedCategory = v
+        RefreshTargetList()
+    end,
 })
-CategoryDropdown:OnChanged(function(v)
-    selectedCategory = v
-    UpdateTargets()
-end)
 
--- Teleport Button
-Tabs.Teleport:AddButton({
-    Title = "Teleport",
-    Description = "Fly to selected target.",
+Tabs.Teleport:Button({
+    Title = "🚀 วาร์ปเลย (Start Teleport)",
+    Desc = "ระบบจะบินข้ามแมพไปหาเป้าหมายอย่างปลอดภัย",
     Callback = function()
         if selectedTarget == "(None Found)" or selectedTarget == "" then
-            Fluent:Notify({ Title = "Error", Content = "No target selected.", Duration = 2 })
+            WindUI:Notify({ Title = "ข้อผิดพลาด", Content = "โปรดเลือกเป้าหมายก่อนครับ!", Duration = 2 })
             return
         end
 
@@ -330,13 +328,13 @@ Tabs.Teleport:AddButton({
         end
 
         if not targetObj then
-            Fluent:Notify({ Title = "Error", Content = "'" .. selectedTarget .. "' not found.", Duration = 3 })
+            WindUI:Notify({ Title = "Error", Content = "'" .. selectedTarget .. "' not found.", Duration = 3 })
             return
         end
 
-        local targetCF = GetPosition(targetObj)
+        local targetCF = FindPosition(targetObj)
         if not targetCF then
-            Fluent:Notify({ Title = "Error", Content = "Can't get position.", Duration = 3 })
+            WindUI:Notify({ Title = "Error", Content = "Can't get position.", Duration = 3 })
             return
         end
 
@@ -350,12 +348,11 @@ Tabs.Teleport:AddButton({
         if hrp then
             if _G.AutoFarm then
                 _G.AutoFarm = false
-                pcall(function() FarmToggle:SetValue(false) end)
             end
-            StopPhysicsFly()
+            StopFlying()
             
             _G.Teleporting = true
-            Fluent:Notify({
+            WindUI:Notify({
                 Title = "Teleporting",
                 Content = "Flying to " .. selectedTarget .. "...",
                 Duration = 3
@@ -367,12 +364,12 @@ Tabs.Teleport:AddButton({
                     if not currentHrp then break end
                     local dist = (currentHrp.Position - destination.Position).Magnitude
                     if dist < 10 then
-                        StopPhysicsFly()
+                        StopFlying()
                         _G.Teleporting = false
-                        Fluent:Notify({ Title = "Arrived", Content = "Reached " .. selectedTarget, Duration = 3 })
+                        WindUI:Notify({ Title = "Arrived", Content = "Reached " .. selectedTarget, Duration = 3 })
                         break
                     end
-                    PhysicsFlyTo(destination)
+                    FlyToTarget(destination)
                     task.wait(0.1)
                 end
             end)
@@ -381,24 +378,24 @@ Tabs.Teleport:AddButton({
 })
 
 -- Stop Teleport
-Tabs.Teleport:AddButton({
-    Title = "Stop Teleport",
-    Description = "Stop flying immediately.",
+Tabs.Teleport:Button({
+    Title = "🛑 หยุดวาร์ป (Cancel)",
+    Desc = "เบรกกลางอากาศทันที",
     Callback = function()
         _G.Teleporting = false
-        StopPhysicsFly()
-        Fluent:Notify({ Title = "Stopped", Content = "Teleport cancelled.", Duration = 2 })
+        StopFlying()
+        WindUI:Notify({ Title = "หยุดเรียบร้อย", Content = "ยกเลิกการวาร์ปแล้วครับ", Duration = 2 })
     end
 })
 
 -- Refresh Targets
-Tabs.Teleport:AddButton({
+Tabs.Teleport:Button({
     Title = "Refresh Targets",
-    Description = "Re-scan targets for current category.",
+    Desc = "Re-scan targets for current category.",
     Callback = function()
-        UpdateTargets()
-        local targets = GetTargetsForCategory(selectedCategory)
-        Fluent:Notify({
+        RefreshTargetList()
+        local targets = FetchTargetsByCategory(selectedCategory)
+        WindUI:Notify({
             Title = "Refreshed",
             Content = selectedCategory .. ": " .. #targets .. " target(s) found.",
             Duration = 3
@@ -409,35 +406,51 @@ Tabs.Teleport:AddButton({
 -- ==========================================
 -- [ 7. Settings Tab ]
 -- ==========================================
-local FlySlider = Tabs.Settings:AddSlider("FlySpeed", {
-    Title = "Fly Speed",
-    Default = 150, Min = 50, Max = 500, Rounding = 0
-})
-FlySlider:OnChanged(function(v) _G.FlySpeed = v end)
+Tabs.Settings:Section({ Title = "⏱️ ความเร็วและเกราะป้องกัน" })
 
-local AttackSlider = Tabs.Settings:AddSlider("AttackRate", {
-    Title = "Attack Speed (ms)",
-    Description = "Higher = slower = safer",
-    Default = 18, Min = 10, Max = 100, Rounding = 0
+Tabs.Settings:Slider({
+    Title = "ระยะเข้าทำ (Attack Distance)",
+    Desc = "ถ้าตีบอสไม่โดนหรือบินห่างเกินไป ให้ปรับลดเลขลงมา (หน่วย: Studs)",
+    Step = 1,
+    Value = { Min = -5, Max = 15, Default = 2 },
+    Callback = function(v) _G.AttackDistance = v end
 })
-AttackSlider:OnChanged(function(v) BASE_COOLDOWN = v / 1000 end)
 
-local HPSlider = Tabs.Settings:AddSlider("MinHP", {
-    Title = "Safety HP (%)",
-    Description = "Stop farming below this HP. Set 0 to disable.",
-    Default = 30, Min = 0, Max = 90, Rounding = 0
+Tabs.Settings:Slider({
+    Title = "ความเร็วการบิน (Fly Speed)",
+    Step = 1,
+    Value = { Min = 50, Max = 500, Default = 150 },
+    Callback = function(v) _G.FlySpeed = v end
 })
-HPSlider:OnChanged(function(v) _G.MinHP = v end)
+
+Tabs.Settings:Slider({
+    Title = "ความเร็วการโจมตี (Attack Cooldown Delay)",
+    Desc = "ยิ่งเลขเยอะยิ่งตีช้า แต่จะเนียนตา ลดโอกาสโดนเกมแบน (หน่วย: มิลลิวินาที)",
+    Step = 1,
+    Value = { Min = 10, Max = 100, Default = 18 },
+    Callback = function(v) BASE_COOLDOWN = v / 1000 end
+})
+
+Tabs.Settings:Slider({
+    Title = "เลือดฉุกเฉิน Safety HP (%)",
+    Desc = "ถ้าเลือดต่ำกว่าเปอร์เซ็นต์นี้ บอทจะหยุดฟาร์มทันทีเพื่อป้องกันตาย (ปรับเป็น 0 เพื่อปิด)",
+    Step = 1,
+    Value = { Min = 0, Max = 90, Default = 30 },
+    Callback = function(v) _G.MinHP = v end
+})
 
 -- ==========================================
 -- [ 8. Misc Tab ]
 -- ==========================================
-local AntiAFKToggle = Tabs.Misc:AddToggle("AntiAFK", { Title = "Anti-AFK", Default = true })
+Tabs.Misc:Section({ Title = "🛡️ ฟังก์ชันป้องกันเซิฟเวอร์" })
 
-local AntiPlayerToggle = Tabs.Misc:AddToggle("AntiPlayer", { 
-    Title = "Anti-Player", 
-    Description = "Auto-kick yourself if anyone else joins the server to avoid admins.",
-    Default = false 
+Tabs.Misc:Toggle({ Title = "ป้องกันการ AFK (Anti-AFK)", Default = true, Callback = function(v) _G.AntiAFK = v end })
+
+Tabs.Misc:Toggle({ 
+    Title = "ระบบเตะผู้เล่นอื่น (Anti-Player)", 
+    Desc = "เตะตัวเองออกจากเซิฟเวอร์ทันทีถ้ามีคนอื่นจอยเข้ามา (เหมาะสำหรับฟาร์มเซิฟ V แบบลับๆ)",
+    Default = false,
+    Callback = function(v) _G.AntiPlayer = v end
 })
 
 -- ==========================================
@@ -446,19 +459,15 @@ local AntiPlayerToggle = Tabs.Misc:AddToggle("AntiPlayer", {
 local FarmState = "IDLE" -- IDLE, SEARCHING, MOVING, ATTACKING
 local CurrentTarget = nil
 
-local function GetTargetBoundingBoxRadius(model)
+local function CalculateHitboxRadius(model)
     local root = model:FindFirstChild("HumanoidRootPart") or model.PrimaryPart
-    if model:IsA("Model") then
-        local extents = model:GetExtentsSize()
-        -- average size roughly determines radius
-        return math.max(extents.X, extents.Z) / 2
-    elseif root then
+    if root then
         return math.max(root.Size.X, root.Size.Z) / 2
     end
     return 2 -- fallback
 end
 
-local function GetOptimalTarget()
+local function FindBestEnemy()
     local enemiesFolder = workspace:FindFirstChild("Enemies")
     if not enemiesFolder then return nil end
     
@@ -524,11 +533,10 @@ task.spawn(function()
         if _G.MinHP > 0 then
             local hpPct = (hum.Health / hum.MaxHealth) * 100
             if hpPct < _G.MinHP then
-                StopPhysicsFly()
+                StopFlying()
                 _G.AutoFarm = false
                 FarmState = "IDLE"
-                pcall(function() FarmToggle:SetValue(false) end)
-                Fluent:Notify({ Title = "Warning: Low HP!", Content = "Auto Farm stopped.", Duration = 5 })
+                WindUI:Notify({ Title = "Warning: Low HP!", Content = "Auto Farm stopped.", Duration = 5 })
                 continue
             end
         end
@@ -536,17 +544,17 @@ task.spawn(function()
         local isValidTarget = CurrentTarget and CurrentTarget.Parent and CurrentTarget:FindFirstChildOfClass("Humanoid") and CurrentTarget:FindFirstChildOfClass("Humanoid").Health > 0.1
         
         if FarmState == "IDLE" or FarmState == "SEARCHING" or not isValidTarget then
-            CurrentTarget = GetOptimalTarget()
+            CurrentTarget = FindBestEnemy()
             if CurrentTarget then
                 FarmState = "MOVING"
                 if AntiFallPart.Parent then AntiFallPart.Parent = nil end
                 if CurrentTarget ~= _G.LastNotifiedTarget then
                     _G.LastNotifiedTarget = CurrentTarget
-                    Fluent:Notify({ Title = "Target Locked", Content = "Now engaging: " .. CurrentTarget.Name, Duration = 2 })
+                    WindUI:Notify({ Title = "Target Locked", Content = "Now engaging: " .. CurrentTarget.Name, Duration = 2 })
                 end
             else
                 FarmState = "SEARCHING"
-                StopPhysicsFly()
+                StopFlying()
                 
                 -- Anti-Fall mechanism
                 if not AntiFallPart.Parent then AntiFallPart.Parent = workspace end
@@ -564,33 +572,36 @@ task.spawn(function()
             end
             
             -- Dynamic BoundingBox Distance
-            local rBox = GetTargetBoundingBoxRadius(CurrentTarget) * 0.6
+            -- จำกัดขนาดไม่ให้กว้างเกินไปเวลาเจอบอสที่โมเดลใหญ่
+            local rBox = math.clamp(CalculateHitboxRadius(CurrentTarget) * 0.6, 0, 8)
+            local totalDist = rBox + _G.AttackDistance
+            
             local offset
             if _G.FarmPosition == "On Head" then
-                offset = CFrame.new(0, rBox + 2, 0)
+                offset = CFrame.new(0, totalDist, 0)
             elseif _G.FarmPosition == "Under" then
-                offset = CFrame.new(0, -(rBox + 2), 0)
+                offset = CFrame.new(0, -totalDist, 0)
             else
                 -- default Behind
-                offset = CFrame.new(0, 0, rBox + 2)
+                offset = CFrame.new(0, 0, totalDist)
             end
             
             local standCFrame = targetRoot.CFrame * offset
             local dist = (hrp.Position - standCFrame.Position).Magnitude
             
-            if dist > 8 then
+            if dist > 12 then
                 FarmState = "MOVING"
-                PhysicsFlyTo(standCFrame)
+                FlyToTarget(standCFrame)
             else
                 FarmState = "ATTACKING"
                 
-                -- Hard lock velocity when attacking
+                -- Hard lock velocity when attacking & push down slightly to prevent floating
                 hrp.CFrame = standCFrame
-                hrp.AssemblyLinearVelocity = Vector3.zero
+                hrp.AssemblyLinearVelocity = Vector3.new(0, -10, 0)
                 hrp.AssemblyAngularVelocity = Vector3.zero
                 
-                PhysicsFlyTo(standCFrame) -- Maintain bypass anchor
-                SafeAttack()
+                FlyToTarget(standCFrame) -- Maintain bypass anchor
+                AutoHit()
             end
         end
     end
@@ -601,13 +612,13 @@ end)
 -- ==========================================
 -- Anti-Player (Kick if someone else joins)
 game:GetService("Players").PlayerAdded:Connect(function(player)
-    if Fluent.Options.AntiPlayer and Fluent.Options.AntiPlayer.Value then
+    if _G.AntiPlayer then
         LocalPlayer:Kick("Anti-Player triggered: " .. player.Name .. " joined the server.")
     end
 end)
 task.spawn(function()
     while task.wait(5) do
-        if Fluent.Options.AntiPlayer and Fluent.Options.AntiPlayer.Value then
+        if _G.AntiPlayer then
             if #game:GetService("Players"):GetPlayers() > 1 then
                 LocalPlayer:Kick("Anti-Player triggered: Someone else is in the server.")
             end
@@ -632,110 +643,17 @@ end)
 
 -- Anti-AFK
 LocalPlayer.Idled:Connect(function()
-    if Fluent.Options.AntiAFK and Fluent.Options.AntiAFK.Value then
+    if _G.AntiAFK then
         VirtualUser:CaptureController()
         VirtualUser:ClickButton2(Vector2.zero)
     end
 end)
 
 -- ==========================================
--- [ 13. Save Manager ]
+-- [ Finish Execution ]
 -- ==========================================
-SaveManager:SetLibrary(Fluent)
-InterfaceManager:SetLibrary(Fluent)
-SaveManager:IgnoreThemeSettings()
-SaveManager:SetIgnoreIndexes({})
-InterfaceManager:SetFolder("SoulCultivationHub")
-SaveManager:SetFolder("SoulCultivationHub/Configs")
-InterfaceManager:BuildInterfaceSection(Tabs.Config)
-SaveManager:BuildConfigSection(Tabs.Config)
-
-Window:SelectTab(1)
-SaveManager:LoadAutoloadConfig()
-
-Fluent:Notify({
+WindUI:Notify({
     Title = "Soul Cultivation Hub",
-    Content = "Loaded successfully! Found " .. #monsterValues .. " monster type(s).",
+    Content = "Loaded successfully! WindUI injected.",
     Duration = 4
 })
-
--- ==========================================
--- [ 14. Floating Toggle Icon ]
--- ==========================================
-local iconGui = Instance.new("ScreenGui")
-iconGui.Name         = "SCH_Icon"
-iconGui.ResetOnSpawn = false
-iconGui.DisplayOrder = 9999
-iconGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-pcall(function() iconGui.Parent = coreGui end)
-if not iconGui.Parent or iconGui.Parent ~= coreGui then
-    iconGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
-end
-
-local icon = Instance.new("TextButton")
-icon.Size             = UDim2.fromOffset(48, 48)
-icon.Position         = UDim2.new(0, 16, 0.5, -24)
-icon.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
-icon.Text             = "HUB"
-icon.TextColor3       = Color3.fromRGB(0, 200, 255)
-icon.Font             = Enum.Font.GothamBold
-icon.TextSize         = 13
-icon.BorderSizePixel  = 0
-icon.ZIndex           = 9999
-icon.Parent           = iconGui
-Instance.new("UICorner", icon).CornerRadius = UDim.new(1, 0)
-
-local stroke = Instance.new("UIStroke", icon)
-stroke.Color     = Color3.fromRGB(0, 200, 255)
-stroke.Thickness = 2
-
-local isDragging = false
-local dragStart, iconStartPos
-
-icon.InputBegan:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1
-       or input.UserInputType == Enum.UserInputType.Touch then
-        isDragging   = false
-        dragStart    = input.Position
-        iconStartPos = icon.Position
-
-        local conn
-        conn = input.Changed:Connect(function()
-            if input.UserInputState == Enum.UserInputState.End then
-                if conn then conn:Disconnect() end
-                dragStart = nil
-                return
-            end
-            if dragStart then
-                local delta = input.Position - dragStart
-                if delta.Magnitude > 6 then
-                    isDragging = true
-                    icon.Position = UDim2.new(
-                        iconStartPos.X.Scale, iconStartPos.X.Offset + delta.X,
-                        iconStartPos.Y.Scale, iconStartPos.Y.Offset + delta.Y
-                    )
-                end
-            end
-        end)
-    end
-end)
-
-local function ToggleUI()
-    if isDragging then
-        isDragging = false
-        return
-    end
-
-    -- Use Fluent built-in minimize API
-    Window:Minimize()
-
-    -- Update icon color based on state
-    local isOpen = not Window.Minimized
-    local activeColor = Color3.fromRGB(0, 200, 255)
-    local dimColor    = Color3.fromRGB(80, 80, 80)
-    stroke.Color    = isOpen and activeColor or dimColor
-    icon.TextColor3 = isOpen and activeColor or dimColor
-end
-
-icon.MouseButton1Up:Connect(ToggleUI)
-icon.TouchTap:Connect(ToggleUI)
