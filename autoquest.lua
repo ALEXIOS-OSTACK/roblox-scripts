@@ -439,13 +439,28 @@ local cachedTarget = nil
 
 local function IsValid(model)
     if not model or not model.Parent then return false end
+    if model.Parent.Name ~= "Enemies" then return false end -- Strict parent check
+    
     local hum = model:FindFirstChildOfClass("Humanoid")
     local hrp = model:FindFirstChild("HumanoidRootPart") or model.PrimaryPart
+    
     if hum and hrp and hum.Health > 0 then
-        -- Avoid targeting completely invisible root parts if that's a corpse mechanic
-        if hrp.Name == "HumanoidRootPart" and hrp.Transparency >= 1 and hum.Health <= 0 then
+        -- Advanced Death Check: Sometimes Health > 0 but the state is Dead
+        if hum:GetState() == Enum.HumanoidStateType.Dead then
             return false
         end
+        
+        -- Advanced Dormant Check: Game hides the boss by making its body invisible before respawn
+        local head = model:FindFirstChild("Head")
+        if head and head:IsA("BasePart") and head.Transparency >= 1 then
+            return false
+        end
+        
+        local torso = model:FindFirstChild("UpperTorso") or model:FindFirstChild("Torso")
+        if torso and torso:IsA("BasePart") and torso.Transparency >= 1 then
+            return false
+        end
+        
         return true
     end
     return false
