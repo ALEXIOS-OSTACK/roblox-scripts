@@ -68,12 +68,14 @@ do
 end
 
 -- ==========================================
--- [ 3. Setup Tabs ]
+-- [ 3. Setup Tabs (Premium Hub Layout) ]
 -- ==========================================
 local Tabs = {
-    Farm = Window:AddTab({ Title = "Farm", Icon = "swords" }),
-    Teleport = Window:AddTab({ Title = "Teleport", Icon = "map-pin" }),
-    Settings = Window:AddTab({ Title = "Settings", Icon = "settings" })
+    Main = Window:AddTab({ Title = "Main", Icon = "home" }),
+    Bosses = Window:AddTab({ Title = "Bosses", Icon = "crown" }),
+    Travel = Window:AddTab({ Title = "Travel", Icon = "compass" }),
+    Safety = Window:AddTab({ Title = "Protections", Icon = "shield" }),
+    Settings = Window:AddTab({ Title = "Config", Icon = "settings" })
 }
 
 SaveManager:SetLibrary(Fluent)
@@ -83,7 +85,7 @@ SaveManager:IgnoreThemeSettings()
 SaveManager:SetIgnoreIndexes({})
 
 InterfaceManager:SetFolder("FluentSettings")
-SaveManager:SetFolder("FluentSettings/FischAutoFarm")
+SaveManager:SetFolder("FluentSettings/SoulCultivition")
 
 Window:SelectTab(1)
 
@@ -206,6 +208,15 @@ local function FlyToTarget(targetCFrame)
     ori.Name = "BypassOrientation"; ori.Attachment0 = att
     ori.Mode = Enum.OrientationAlignmentMode.OneAttachment
     ori.MaxTorque = math.huge; ori.Responsiveness = 200
+    
+    -- If attacking, lock position rigidly to stop floating up
+    if FarmState == "ATTACKING" then
+        pos.RigidityEnabled = true
+        ori.RigidityEnabled = true
+    else
+        pos.RigidityEnabled = false
+        ori.RigidityEnabled = false
+    end
 
     pos.Position = targetCFrame.Position
     ori.CFrame   = targetCFrame
@@ -243,59 +254,72 @@ end
 -- ==========================================
 
 -- ------------------------------------------
--- FARM TAB
+-- 🟢 MAIN TAB (Combat & Farm Control)
 -- ------------------------------------------
-Tabs.Farm:AddParagraph({Title = "⚙️ Main Controls", Content = "Toggle auto-farming behavior."})
+Tabs.Main:AddParagraph({Title = "Power & Control", Content = "Master switch for auto-farming and targeting."})
 
-local TogFarm = Tabs.Farm:AddToggle("TogAutoFarm", {
+local TogFarm = Tabs.Main:AddToggle("TogAutoFarm", {
     Title = "Start Auto Farm",
     Default = false,
     Callback = function(v) _G.AutoFarm = v end
 })
 
-Tabs.Farm:AddParagraph({Title = "🎯 Targeting & Position", Content = "Setup target selection and your position."})
-
 local mVals = ScanMonsters()
 if #mVals == 0 then mVals = {"(None)"} end
 
-local DropMonster = Tabs.Farm:AddDropdown("DropMonster", {
-    Title = "Select Monster",
+local DropMonster = Tabs.Main:AddDropdown("DropMonster", {
+    Title = "Target Monster",
     Values = mVals,
     Multi = false,
     Default = 1,
     Callback = function(v) _G.SelectedMonster = v end
 })
 
-Tabs.Farm:AddButton({
-    Title = "Refresh Monsters",
+Tabs.Main:AddButton({
+    Title = "↻ Refresh Entity List",
     Callback = function()
         local nm = ScanMonsters()
         if #nm == 0 then nm = {"(None)"} end
         DropMonster:SetValues(nm)
         DropMonster:SetValue(nm[1])
-        Fluent:Notify({ Title = "Refreshed", Content = "Monster list updated.", Duration = 3 })
+        Fluent:Notify({ Title = "Entity Scanner", Content = "Target roster updated.", Duration = 3 })
     end
 })
 
-Tabs.Farm:AddDropdown("DropStandPos", {
-    Title = "Stand Position",
+Tabs.Main:AddParagraph({Title = "Combat Positioning", Content = "Configure how the bot engages entities in combat."})
+
+Tabs.Main:AddDropdown("DropStandPos", {
+    Title = "Engagement Stance",
     Values = {"Behind", "On Head", "Under"},
     Multi = false,
     Default = 1,
     Callback = function(v) _G.FarmPosition = v end
 })
 
-Tabs.Farm:AddParagraph({Title = "👑 Boss Farming", Content = "Prioritize specific bosses over normal monsters."})
+Tabs.Main:AddSlider("SldDistance", {
+    Title = "Strike Distance",
+    Description = "Offset distance from the target's core.",
+    Default = 2,
+    Min = -5,
+    Max = 15,
+    Rounding = 1,
+    Callback = function(v) _G.AttackDistance = v end
+})
 
-Tabs.Farm:AddToggle("TogPriorityBoss", {
-    Title = "Priority Boss",
+-- ------------------------------------------
+-- 👑 BOSSES TAB
+-- ------------------------------------------
+Tabs.Bosses:AddParagraph({Title = "Boss Priority System", Content = "Configure the hierarchy and targeting for boss farming."})
+
+Tabs.Bosses:AddToggle("TogPriorityBoss", {
+    Title = "Enable Boss Priority",
     Default = false,
     Callback = function(v) _G.BossPriority = v end
 })
 
-local DropBosses = Tabs.Farm:AddDropdown("DropPriorityBosses", {
-    Title = "Select Bosses",
-    Description = "Select bosses to prioritize",
+local DropBosses = Tabs.Bosses:AddDropdown("DropPriorityBosses", {
+    Title = "Select Hunt Targets",
+    Description = "Choose specific bosses to hunt above normal mobs.",
     Values = BossList,
     Multi = true,
     Default = {},
@@ -304,12 +328,12 @@ local DropBosses = Tabs.Farm:AddDropdown("DropPriorityBosses", {
 
 
 -- ------------------------------------------
--- TELEPORT TAB
+-- 🧭 TRAVEL TAB
 -- ------------------------------------------
-Tabs.Teleport:AddParagraph({Title = "📍 Teleport Actions", Content = "Instantly move to specific NPCs or zones."})
+Tabs.Travel:AddParagraph({Title = "Fast Navigation System", Content = "Instantly travel to important coordinates and domains."})
 
-Tabs.Teleport:AddDropdown("DropCategory", {
-    Title = "Filter Category",
+Tabs.Travel:AddDropdown("DropCategory", {
+    Title = "Domain Filter",
     Values = {"NPC", "Qi", "Training"},
     Multi = false,
     Default = 1,
@@ -321,16 +345,16 @@ Tabs.Teleport:AddDropdown("DropCategory", {
     end
 })
 
-local DropTarget = Tabs.Teleport:AddDropdown("DropTarget", {
-    Title = "Select Target",
+local DropTarget = Tabs.Travel:AddDropdown("DropTarget", {
+    Title = "Select Destination",
     Values = initTargets,
     Multi = false,
     Default = 1,
     Callback = function(v) selectedTarget = v end
 })
 
-Tabs.Teleport:AddButton({
-    Title = "🚀 Start Teleport",
+Tabs.Travel:AddButton({
+    Title = "🚀 Launch Travel",
     Callback = function()
         if _G.Teleporting then
             return Fluent:Notify({ Title = "Warning", Content = "Already teleporting in progress!", Duration = 3 })
@@ -382,32 +406,52 @@ Tabs.Teleport:AddButton({
     end
 })
 
-Tabs.Teleport:AddButton({
-    Title = "🛑 Cancel Teleport",
-    Callback = function()
-        _G.Teleporting = false
-        StopFlying()
-        Fluent:Notify({ Title = "Cancelled", Content = "Teleport stopped.", Duration = 3 })
-    end
+    Tabs.Travel:AddButton({
+        Title = "🛑 Abort Sequence",
+        Callback = function()
+            _G.Teleporting = false
+            StopFlying()
+            Fluent:Notify({ Title = "Thrusters Offline", Content = "Travel Sequence aborted.", Duration = 3 })
+        end
+    })
+
+
+-- ------------------------------------------
+-- 🛡️ SAFETY TAB
+-- ------------------------------------------
+Tabs.Safety:AddParagraph({Title = "Security Measures", Content = "Automated protocols to protect your account and character."})
+
+Tabs.Safety:AddToggle("TogAntiAFK", { 
+    Title = "Anti-AFK Protocol", 
+    Default = true, 
+    Callback = function(v) _G.AntiAFK = v end 
 })
 
-
--- SETTINGS TAB
-Tabs.Settings:AddParagraph({Title = "⚙️ Adjustments", Content = "Tweak combat logic and server protections."})
-
-Tabs.Settings:AddSlider("SldDistance", {
-    Title = "Attack Distance",
-    Description = "Offset distance from target",
-    Default = 2,
-    Min = -5,
-    Max = 15,
-    Rounding = 1,
-    Callback = function(v) _G.AttackDistance = v end
+Tabs.Safety:AddToggle("TogAntiPlayer", { 
+    Title = "Ghost Protocol (Anti-Ban)", 
+    Description = "Automatically disconnects if an anomaly (other player) enters your realm.",
+    Default = false, 
+    Callback = function(v) _G.AntiPlayer = v end 
 })
+
+Tabs.Safety:AddSlider("SldSafetyHP", {
+    Title = "Critical Vitality Limit (%)",
+    Description = "Terminates combat operations if HP drops below this threshold.",
+    Default = 30,
+    Min = 0,
+    Max = 90,
+    Rounding = 0,
+    Callback = function(v) _G.MinHP = v end
+})
+
+-- ------------------------------------------
+-- ⚙️ CONFIG TAB
+-- ------------------------------------------
+Tabs.Settings:AddParagraph({Title = "Engine Parameters", Content = "Fine-tune speed, delays, and interface data."})
 
 Tabs.Settings:AddSlider("SldSpeed", {
-    Title = "Fly Speed",
-    Description = "Velocity across map",
+    Title = "Flight Velocity",
+    Description = "Max propulsion speed across the map architecture.",
     Default = 150,
     Min = 50,
     Max = 500,
@@ -416,27 +460,14 @@ Tabs.Settings:AddSlider("SldSpeed", {
 })
 
 Tabs.Settings:AddSlider("SldCooldown", {
-    Title = "Attack Cooldown (ms)",
-    Description = "Delay between hits based on weapon",
+    Title = "Macro Strike Delay (ms)",
+    Description = "Action interval between weapon strikes. Keep smooth to avoid server desync.",
     Default = 18,
     Min = 10,
     Max = 100,
     Rounding = 0,
     Callback = function(v) BASE_COOLDOWN = v / 1000 end
 })
-
-Tabs.Settings:AddSlider("SldSafetyHP", {
-    Title = "Safety HP %",
-    Description = "Auto-stops farm if health is low",
-    Default = 30,
-    Min = 0,
-    Max = 90,
-    Rounding = 0,
-    Callback = function(v) _G.MinHP = v end
-})
-
-Tabs.Settings:AddToggle("TogAntiAFK", { Title = "Anti-AFK", Default = true, Callback = function(v) _G.AntiAFK = v end })
-Tabs.Settings:AddToggle("TogAntiPlayer", { Title = "Anti-Player", Default = false, Callback = function(v) _G.AntiPlayer = v end })
 
 InterfaceManager:BuildInterfaceSection(Tabs.Settings)
 SaveManager:BuildConfigSection(Tabs.Settings)
@@ -559,7 +590,7 @@ task.spawn(function()
             else
                 FarmState = "ATTACKING"
                 hrp.CFrame = standCFrame
-                hrp.AssemblyLinearVelocity = Vector3.new(0, -10, 0)
+                hrp.AssemblyLinearVelocity = Vector3.zero
                 hrp.AssemblyAngularVelocity = Vector3.zero
                 FlyToTarget(standCFrame)
                 AutoHit()
