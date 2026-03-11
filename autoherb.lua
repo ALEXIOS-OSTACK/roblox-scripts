@@ -25,19 +25,49 @@ local BossList = {"Zanshi Bing Ren", "Zanshi Huo Ren", "Mount Hua Leader"}
 -- ==========================================
 -- [ 2. Fluent UI Initialization ]
 -- ==========================================
-local Fluent = loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
-local SaveManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/dawid-scripts/Fluent/main/Addons/SaveManager.lua"))()
-local InterfaceManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/dawid-scripts/Fluent/main/Addons/InterfaceManager.lua"))()
+local function HttpGetOrError(url)
+    local ok, res = pcall(function()
+        return game:HttpGet(url, true)
+    end)
+    if not ok then
+        error(("HttpGet failed for %s\n%s"):format(url, tostring(res)))
+    end
+    return res
+end
 
-local Window = Fluent:CreateWindow({
-    Title = "Fisch Auto Farm v6.0",
-    SubTitle = "by Private Scr",
-    TabWidth = 160,
-    Size = UDim2.fromOffset(580, 460),
-    Acrylic = true,
-    Theme = "Dark",
-    MinimizeKey = Enum.KeyCode.RightControl
-})
+local function LoadStringOrError(src, name)
+    local fn, err = loadstring(src)
+    if not fn then
+        error(("loadstring failed for %s\n%s"):format(name or "unknown", tostring(err)))
+    end
+    return fn()
+end
+
+-- GitHub Releases download links often redirect; some executors fail redirects.
+-- Use raw.githubusercontent.com directly for maximum compatibility.
+local Fluent = LoadStringOrError(HttpGetOrError("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/main.lua"), "Fluent/main.lua")
+local SaveManager = LoadStringOrError(HttpGetOrError("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Addons/SaveManager.lua"), "Fluent/SaveManager.lua")
+local InterfaceManager = LoadStringOrError(HttpGetOrError("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Addons/InterfaceManager.lua"), "Fluent/InterfaceManager.lua")
+
+local Window
+do
+    local ok, res = pcall(function()
+        return Fluent:CreateWindow({
+            Title = "Fisch Auto Farm v6.0",
+            SubTitle = "by Private Scr",
+            TabWidth = 160,
+            Size = UDim2.fromOffset(580, 460),
+            Acrylic = false,
+            Theme = "Dark",
+            MinimizeKey = Enum.KeyCode.RightControl
+        })
+    end)
+    if not ok then
+        warn("[UI] Fluent:CreateWindow failed: " .. tostring(res))
+        error(res)
+    end
+    Window = res
+end
 
 -- ==========================================
 -- [ 3. Setup Tabs ]
@@ -62,11 +92,15 @@ Window:SelectTab(1)
 -- (Farm Entities)
 local function ScanMonsters()
     local names = {}
+    local seen = {}
     local e = workspace:FindFirstChild("Enemies")
     if e then
         for _, obj in ipairs(e:GetChildren()) do
             if obj:FindFirstChild("Humanoid") and not obj.Name:lower():find("zanshi") then
-                if not table.find(names, obj.Name) then table.insert(names, obj.Name) end
+                if not seen[obj.Name] then 
+                    seen[obj.Name] = true
+                    table.insert(names, obj.Name) 
+                end
             end
         end
     end
@@ -76,11 +110,15 @@ end
 
 local function ScanNPCs()
     local names = {}
+    local seen = {}
     local npcFolder = workspace:FindFirstChild("NPCs")
     if npcFolder then
         for _, npc in ipairs(npcFolder:GetChildren()) do
             if npc:FindFirstChild("HumanoidRootPart") or npc:FindFirstChild("Head") or npc:IsA("BasePart") or npc:IsA("Model") then
-                if not table.find(names, npc.Name) then table.insert(names, npc.Name) end
+                if not seen[npc.Name] then 
+                    seen[npc.Name] = true
+                    table.insert(names, npc.Name) 
+                end
             end
         end
     end
@@ -90,12 +128,16 @@ end
 
 local function ScanZones(subFolder)
     local names = {}
+    local seen = {}
     local tz = workspace:FindFirstChild("Training Zones")
     if tz then
         local folder = tz:FindFirstChild(subFolder)
         if folder then
             for _, zone in ipairs(folder:GetChildren()) do
-                if not table.find(names, zone.Name) then table.insert(names, zone.Name) end
+                if not seen[zone.Name] then 
+                    seen[zone.Name] = true
+                    table.insert(names, zone.Name) 
+                end
             end
         end
     end
@@ -187,12 +229,12 @@ local function AutoHit()
     if not char or not hrp then return end
 
     pcall(function()
-        local tool = char:FindFirstChild("Light") or LocalPlayer.Backpack:FindFirstChild("Light")
+        local tool = char:FindFirstChildOfClass("Tool") or LocalPlayer.Backpack:FindFirstChildOfClass("Tool")
         if tool then
             if tool.Parent ~= char then char.Humanoid:EquipTool(tool) end
             tool:Activate()
-            if tool:IsA("Tool") and ReplicatedStorage:FindFirstChild("RemoteEvents") then
-                ReplicatedStorage.RemoteEvents.Attack:FireServer("Light", { ["RootPart"] = hrp })
+            if ReplicatedStorage:FindFirstChild("RemoteEvents") and ReplicatedStorage.RemoteEvents:FindFirstChild("Attack") then
+                ReplicatedStorage.RemoteEvents.Attack:FireServer(tool.Name, { ["RootPart"] = hrp })
             end
         end
     end)
@@ -204,7 +246,7 @@ end
 -- FARM TAB
 Tabs.Farm:AddParagraph({Title = "🔥 Combat Options", Content = "Configure your auto-farming behavior."})
 
-Tabs.Farm:AddToggle("TogAutoFarm", {
+local TogFarm = Tabs.Farm:AddToggle("TogAutoFarm", {
     Title = "Start Auto Farm",
     Default = false,
     Callback = function(v) _G.AutoFarm = v end
@@ -271,12 +313,15 @@ Tabs.Teleport:AddDropdown("DropCategory", {
     end
 })
 
-Tabs.Teleport:AddButton({
-    Title = "🚀 Start Teleport",
-    Callback = function()
-        if selectedTarget == "(None Found)" or selectedTarget == "" then
-            return Fluent:Notify({ Title = "Error", Content = "Please select a target!", Duration = 3 })
-        end
+    Tabs.Teleport:AddButton({
+        Title = "🚀 Start Teleport",
+        Callback = function()
+            if _G.Teleporting then
+                return Fluent:Notify({ Title = "Warning", Content = "Already teleporting in progress!", Duration = 3 })
+            end
+            if selectedTarget == "(None Found)" or selectedTarget == "" then
+                return Fluent:Notify({ Title = "Error", Content = "Please select a target!", Duration = 3 })
+            end
 
         local targetObj = nil
         if selectedCategory == "NPC" then
@@ -406,8 +451,14 @@ local function FindBestEnemy()
         local root = e:FindFirstChild("HumanoidRootPart") or e.PrimaryPart
         if hum and root and hum.Health > 0.1 and hum:GetState() ~= Enum.HumanoidStateType.Dead then
             local dist = (myPos - root.Position).Magnitude
-            if e.Name == _G.SelectedMonster then
+            
+            if _G.BossPriority and table.find(BossList, e.Name) then
                 if dist < bestMobScore then
+                    bestMobScore = dist
+                    bestMob = e
+                end
+            elseif not bestMob or not _G.BossPriority then
+                if e.Name == _G.SelectedMonster and dist < bestMobScore then
                     bestMobScore = dist
                     bestMob = e
                 end
@@ -441,12 +492,15 @@ task.spawn(function()
         if not char or not hum or not hrp then continue end
         
         if _G.MinHP > 0 then
-            local hpPct = (hum.Health / hum.MaxHealth) * 100
-            if hpPct < _G.MinHP then
-                StopFlying()
-                _G.AutoFarm = false
-                Fluent:Notify({ Title = "Low HP!", Content = "Auto Farm stopped for safety.", Duration = 4 })
-                continue
+            if hum.MaxHealth and hum.MaxHealth > 0 then
+                local hpPct = (hum.Health / hum.MaxHealth) * 100
+                if hpPct < _G.MinHP then
+                    StopFlying()
+                    _G.AutoFarm = false
+                    if TogFarm then TogFarm:SetValue(false) end
+                    Fluent:Notify({ Title = "Low HP!", Content = "Auto Farm stopped for safety.", Duration = 4 })
+                    continue
+                end
             end
         end
 
