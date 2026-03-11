@@ -241,8 +241,11 @@ end
 -- ==========================================
 -- [ 4. Build Components in UI ]
 -- ==========================================
+
+-- ------------------------------------------
 -- FARM TAB
-Tabs.Farm:AddParagraph({Title = "🔥 Combat Options", Content = "Configure your auto-farming behavior."})
+-- ------------------------------------------
+Tabs.Farm:AddParagraph({Title = "⚙️ Main Controls", Content = "Toggle auto-farming behavior."})
 
 local TogFarm = Tabs.Farm:AddToggle("TogAutoFarm", {
     Title = "Start Auto Farm",
@@ -250,19 +253,7 @@ local TogFarm = Tabs.Farm:AddToggle("TogAutoFarm", {
     Callback = function(v) _G.AutoFarm = v end
 })
 
-Tabs.Farm:AddToggle("TogPriorityBoss", {
-    Title = "Priority Boss",
-    Default = false,
-    Callback = function(v) _G.BossPriority = v end
-})
-
-Tabs.Farm:AddDropdown("DropStandPos", {
-    Title = "Stand Position",
-    Values = {"Behind", "On Head", "Under"},
-    Multi = false,
-    Default = 1,
-    Callback = function(v) _G.FarmPosition = v end
-})
+Tabs.Farm:AddParagraph({Title = "🎯 Targeting & Position", Content = "Setup target selection and your position."})
 
 local mVals = ScanMonsters()
 if #mVals == 0 then mVals = {"(None)"} end
@@ -286,17 +277,36 @@ Tabs.Farm:AddButton({
     end
 })
 
-
--- TELEPORT TAB
-Tabs.Teleport:AddParagraph({Title = "📍 Teleport Actions", Content = "Instantly move to specific NPCs or zones."})
-
-local DropTarget = Tabs.Teleport:AddDropdown("DropTarget", {
-    Title = "Select Target",
-    Values = initTargets,
+Tabs.Farm:AddDropdown("DropStandPos", {
+    Title = "Stand Position",
+    Values = {"Behind", "On Head", "Under"},
     Multi = false,
     Default = 1,
-    Callback = function(v) selectedTarget = v end
+    Callback = function(v) _G.FarmPosition = v end
 })
+
+Tabs.Farm:AddParagraph({Title = "👑 Boss Farming", Content = "Prioritize specific bosses over normal monsters."})
+
+Tabs.Farm:AddToggle("TogPriorityBoss", {
+    Title = "Priority Boss",
+    Default = false,
+    Callback = function(v) _G.BossPriority = v end
+})
+
+local DropBosses = Tabs.Farm:AddDropdown("DropBosses", {
+    Title = "Select Bosses",
+    Description = "Select bosses to prioritize",
+    Values = BossList,
+    Multi = true,
+    Default = {},
+    Callback = function(v) _G.SelectedBosses = v end
+})
+
+
+-- ------------------------------------------
+-- TELEPORT TAB
+-- ------------------------------------------
+Tabs.Teleport:AddParagraph({Title = "📍 Teleport Actions", Content = "Instantly move to specific NPCs or zones."})
 
 Tabs.Teleport:AddDropdown("DropCategory", {
     Title = "Filter Category",
@@ -311,8 +321,16 @@ Tabs.Teleport:AddDropdown("DropCategory", {
     end
 })
 
-    Tabs.Teleport:AddButton({
-        Title = "🚀 Start Teleport",
+local DropTarget = Tabs.Teleport:AddDropdown("DropTarget", {
+    Title = "Select Target",
+    Values = initTargets,
+    Multi = false,
+    Default = 1,
+    Callback = function(v) selectedTarget = v end
+})
+
+Tabs.Teleport:AddButton({
+    Title = "🚀 Start Teleport",
         Callback = function()
             if _G.Teleporting then
                 return Fluent:Notify({ Title = "Warning", Content = "Already teleporting in progress!", Duration = 3 })
@@ -450,7 +468,8 @@ local function FindBestEnemy()
         if hum and root and hum.Health > 0.1 and hum:GetState() ~= Enum.HumanoidStateType.Dead then
             local dist = (myPos - root.Position).Magnitude
             
-            if _G.BossPriority and table.find(BossList, e.Name) then
+            local isSelectedBoss = _G.SelectedBosses and _G.SelectedBosses[e.Name]
+            if _G.BossPriority and isSelectedBoss then
                 if dist < bestMobScore then
                     bestMobScore = dist
                     bestMob = e
