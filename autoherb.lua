@@ -43,9 +43,9 @@ local function LoadStringOrError(src, name)
     return fn()
 end
 
-local Fluent = LoadStringOrError(HttpGetOrError("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"), "Fluent/main.lua")
-local SaveManager = LoadStringOrError(HttpGetOrError("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Addons/SaveManager.lua"), "Fluent/SaveManager.lua")
-local InterfaceManager = LoadStringOrError(HttpGetOrError("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Addons/InterfaceManager.lua"), "Fluent/InterfaceManager.lua")
+local Fluent = LoadStringOrError(HttpGetOrError("https://github.com/dawid-scripts/Fluent/releases/download/1.1.0/main.lua"), "Fluent/main.lua")
+local SaveManager = LoadStringOrError(HttpGetOrError("https://cdn.jsdelivr.net/gh/dawid-scripts/Fluent@master/Addons/SaveManager.lua"), "Fluent/SaveManager.lua")
+local InterfaceManager = LoadStringOrError(HttpGetOrError("https://cdn.jsdelivr.net/gh/dawid-scripts/Fluent@master/Addons/InterfaceManager.lua"), "Fluent/InterfaceManager.lua")
 
 local Window
 do
