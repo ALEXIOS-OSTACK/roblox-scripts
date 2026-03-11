@@ -51,8 +51,8 @@ local Window
 do
     local ok, res = pcall(function()
         return Fluent:CreateWindow({
-            Title = "Fisch Auto Farm v6.0",
-            SubTitle = "by Private Scr",
+            Title = "Soul Cultivition",
+            SubTitle = "by NIGHT",
             TabWidth = 160,
             Size = UDim2.fromOffset(580, 460),
             Acrylic = false,
