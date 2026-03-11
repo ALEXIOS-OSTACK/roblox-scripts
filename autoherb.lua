@@ -19,6 +19,7 @@ _G.Teleporting   = false
 _G.AntiAFK       = true
 _G.AntiPlayer    = false
 _G.AttackDistance = 2
+_G.AutoAltars    = false
 
 local BossList = {"Zanshi Bing Ren", "Zanshi Huo Ren", "Mount Hua Leader"}
 
@@ -283,7 +284,13 @@ Tabs.Main:AddButton({
         DropMonster:SetValues(nm)
         DropMonster:SetValue(nm[1])
         Fluent:Notify({ Title = "Entity Scanner", Content = "Target roster updated.", Duration = 3 })
-    end
+Tabs.Main:AddParagraph({Title = "Exploration & Loot", Content = "Automated gathering of world resources."})
+
+Tabs.Main:AddToggle("TogAutoAltars", {
+    Title = "Auto Collect Altars",
+    Description = "Automatically teleports to and claims Altars when they spawn.",
+    Default = false,
+    Callback = function(v) _G.AutoAltars = v end
 })
 
 Tabs.Main:AddParagraph({Title = "Combat Positioning", Content = "Configure how the bot engages entities in combat."})
@@ -594,6 +601,49 @@ task.spawn(function()
                 hrp.AssemblyAngularVelocity = Vector3.zero
                 FlyToTarget(standCFrame)
                 AutoHit()
+            end
+        end
+    end
+end)
+
+-- Background Routine: Auto Collect Altars
+task.spawn(function()
+    while task.wait(1) do
+        if not _G.AutoAltars or _G.Teleporting then continue end
+        
+        local altarsFolder = workspace:FindFirstChild("Altars")
+        if not altarsFolder then continue end
+        
+        local char = LocalPlayer.Character
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        if not hrp then continue end
+
+        for _, altar in ipairs(altarsFolder:GetChildren()) do
+            if not _G.AutoAltars then break end
+            
+            local targetPart = altar:IsA("BasePart") and altar or altar:FindFirstChildWhichIsA("BasePart", true)
+            local prompt = altar:FindFirstChildWhichIsA("ProximityPrompt", true)
+            
+            if targetPart and prompt and prompt.Enabled then
+                -- Suspend normal combat farming temporarily
+                local wasFarming = _G.AutoFarm
+                _G.AutoFarm = false 
+                StopFlying()
+                
+                -- Teleport to Altar
+                hrp.CFrame = targetPart.CFrame * CFrame.new(0, 3, 0)
+                hrp.AssemblyLinearVelocity = Vector3.zero
+                task.wait(0.5)
+                
+                -- Fire the Prompt
+                if prompt.Enabled then
+                    fireproximityprompt(prompt)
+                    Fluent:Notify({ Title = "Loot Recovered", Content = "Claimed " .. altar.Name, Duration = 2 })
+                    task.wait(1) -- Give it time to register
+                end
+                
+                -- Resume Farming
+                _G.AutoFarm = wasFarming
             end
         end
     end
