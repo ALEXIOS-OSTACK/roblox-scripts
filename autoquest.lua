@@ -298,7 +298,6 @@ local DropBosses = Tabs.Farm:AddDropdown("DropBosses", {
     Description = "Select bosses to prioritize",
     Values = BossList,
     Multi = true,
-    Default = {},
     Callback = function(v) _G.SelectedBosses = v end
 })
 
