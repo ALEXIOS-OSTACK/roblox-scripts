@@ -293,11 +293,12 @@ Tabs.Farm:AddToggle("TogPriorityBoss", {
     Callback = function(v) _G.BossPriority = v end
 })
 
-local DropBosses = Tabs.Farm:AddDropdown("DropBosses", {
+local DropBosses = Tabs.Farm:AddDropdown("DropPriorityBosses", {
     Title = "Select Bosses",
     Description = "Select bosses to prioritize",
     Values = BossList,
     Multi = true,
+    Default = {},
     Callback = function(v) _G.SelectedBosses = v end
 })
 
