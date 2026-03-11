@@ -330,13 +330,13 @@ local DropTarget = Tabs.Teleport:AddDropdown("DropTarget", {
 
 Tabs.Teleport:AddButton({
     Title = "🚀 Start Teleport",
-        Callback = function()
-            if _G.Teleporting then
-                return Fluent:Notify({ Title = "Warning", Content = "Already teleporting in progress!", Duration = 3 })
-            end
-            if selectedTarget == "(None Found)" or selectedTarget == "" then
-                return Fluent:Notify({ Title = "Error", Content = "Please select a target!", Duration = 3 })
-            end
+    Callback = function()
+        if _G.Teleporting then
+            return Fluent:Notify({ Title = "Warning", Content = "Already teleporting in progress!", Duration = 3 })
+        end
+        if selectedTarget == "(None Found)" or selectedTarget == "" then
+            return Fluent:Notify({ Title = "Error", Content = "Please select a target!", Duration = 3 })
+        end
 
         local targetObj = nil
         if selectedCategory == "NPC" then
